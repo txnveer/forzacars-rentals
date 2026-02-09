@@ -6,7 +6,12 @@ export type Profile = {
   email: string;
   role: "CUSTOMER" | "BUSINESS" | "ADMIN";
   business_id: string | null;
+  display_name: string | null;
+  phone: string | null;
+  bio: string | null;
+  avatar_path: string | null;
   created_at: string;
+  updated_at: string;
 };
 
 /**

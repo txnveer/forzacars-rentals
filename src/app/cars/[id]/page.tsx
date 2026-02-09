@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { piClassName, piClassColor } from "@/lib/piClass";
 import ColorFilter from "./ColorFilter";
+import ScheduleCalendar from "./ScheduleCalendar";
 
 const BLUR_PLACEHOLDER =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN88P/BfwAJhAPkQ1sDSgAAAABJRU5ErkJggg==";
@@ -42,7 +43,7 @@ export default async function CarModelDetailPage({
   const { data: allUnits } = await supabase
     .from("car_units")
     .select(
-      "id, display_name, color, color_hex, credits_per_hour, business_id, businesses ( name )"
+      "id, display_name, color, color_hex, credits_per_hour, business_id, image_path, thumb_path, businesses ( name )"
     )
     .eq("car_model_id", id)
     .eq("active", true);
@@ -240,6 +241,15 @@ export default async function CarModelDetailPage({
             })}
           </div>
 
+          {/* ---- Schedule Calendar ---- */}
+          <div className="mt-10">
+            <ScheduleCalendar
+              modelId={id}
+              suggestedCph={suggestedCph}
+              colorFilter={colorFilter ?? undefined}
+            />
+          </div>
+
           {/* ---- Available Units ---- */}
           <div className="mt-10 rounded-xl border border-gray-200 bg-gray-50 p-5">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-500">
@@ -274,6 +284,9 @@ export default async function CarModelDetailPage({
                   const unitLabel = u.display_name ?? displayName;
                   const cph = u.credits_per_hour ?? suggestedCph;
                   const isAvailable = !busyUnitIds.has(u.id);
+                  const unitThumb = u.thumb_path
+                    ? `/api/storage/car-images/${u.thumb_path}`
+                    : null;
 
                   return (
                     <li
@@ -282,22 +295,35 @@ export default async function CarModelDetailPage({
                         isAvailable ? "" : "opacity-50"
                       }`}
                     >
-                      <div className="flex items-center gap-2">
-                        {u.color_hex && (
+                      <div className="flex items-center gap-3">
+                        {/* Unit thumbnail or color swatch */}
+                        {unitThumb ? (
+                          <div className="relative h-10 w-10 flex-shrink-0 overflow-hidden rounded bg-gray-100">
+                            <Image
+                              src={unitThumb}
+                              alt={unitLabel}
+                              fill
+                              sizes="40px"
+                              className="object-cover"
+                            />
+                          </div>
+                        ) : u.color_hex ? (
                           <span
-                            className="inline-block h-3 w-3 rounded-full border border-gray-300"
+                            className="inline-block h-4 w-4 flex-shrink-0 rounded-full border border-gray-300"
                             style={{ backgroundColor: u.color_hex }}
                           />
-                        )}
-                        <span className="font-medium text-gray-900">
-                          {unitLabel}
-                        </span>
-                        {u.color && (
-                          <span className="text-gray-400">{u.color}</span>
-                        )}
-                        <span className="text-xs text-gray-400">
-                          {bizName}
-                        </span>
+                        ) : null}
+                        <div>
+                          <span className="font-medium text-gray-900">
+                            {unitLabel}
+                          </span>
+                          {u.color && (
+                            <span className="ml-2 text-gray-400">{u.color}</span>
+                          )}
+                          <p className="text-xs text-gray-400">
+                            {bizName}
+                          </p>
+                        </div>
                       </div>
                       <div className="flex items-center gap-3">
                         <span className="text-gray-600">

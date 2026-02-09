@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth/getProfile";
+import RequestCreditsButton from "./RequestCreditsButton";
 
 export default async function WalletPage() {
   const profile = await getProfile();
@@ -33,6 +34,9 @@ export default async function WalletPage() {
             credits
           </span>
         </p>
+        <div className="mt-6">
+          <RequestCreditsButton />
+        </div>
       </div>
 
       {/* Ledger history */}

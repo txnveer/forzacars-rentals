@@ -57,6 +57,12 @@ export default async function Navbar() {
               {profile.role === "BUSINESS" && (
                 <>
                   <Link
+                    href="/biz/fleet"
+                    className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
+                  >
+                    Fleet
+                  </Link>
+                  <Link
                     href="/biz/inventory"
                     className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
                   >
@@ -106,6 +112,22 @@ export default async function Navbar() {
                   </Link>
                 </>
               )}
+
+              {/* Messages link (all authenticated users) */}
+              <Link
+                href="/messages"
+                className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
+              >
+                Messages
+              </Link>
+
+              {/* Profile link */}
+              <Link
+                href="/profile"
+                className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
+              >
+                Profile
+              </Link>
 
               {/* Role badge + email */}
               <span className="hidden text-xs text-gray-400 sm:inline">
