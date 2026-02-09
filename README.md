@@ -42,6 +42,7 @@ The Postgres schema lives in `supabase/migrations/` and is managed via the Supab
 | `businesses` | Rental companies |
 | `profiles` | User profiles (1 : 1 with `auth.users`) |
 | `cars` | Vehicles belonging to a business |
+| `cars_catalog` | Wiki-sourced reference cars (Forza Horizon 2) — publicly readable |
 | `car_availability_rules` | Recurring weekly time windows a car is bookable |
 | `car_blackouts` | Ad-hoc unavailability periods (maintenance, etc.) |
 | `bookings` | Reservations — includes a GiST exclusion constraint to prevent double-booking |
@@ -77,6 +78,38 @@ supabase db reset   # drops & recreates from migrations
 supabase migration up
 ```
 
+## Importing FH2 Cars
+
+The `cars_catalog` table is populated by a server-only script that scrapes the
+[Forza Horizon 2 car list](https://forza.fandom.com/wiki/Forza_Horizon_2/Cars)
+from the Forza Fandom wiki.
+
+```bash
+# Dry-run — parse and print summary, no DB writes
+npm run import:fh2:dry
+
+# Full import — parse, fetch images, upsert into Supabase
+npm run import:fh2
+```
+
+**Requirements:** `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` must
+be set in `.env.local`.  The script uses the service-role key to bypass RLS.
+
+The import is **idempotent** — re-running it updates existing rows matched by the
+`(source, source_game, wiki_page_title)` unique constraint.
+
+What the script does:
+
+1. Fetches the page HTML via the MediaWiki `parse` API.
+2. Locates the main cars table (by matching `Vehicle` + `PI` headers) and parses
+   every row with **cheerio** — extracts year, manufacturer, model, stats, and PI.
+3. Batch-fetches thumbnail images (600 px) via the MediaWiki `PageImages` API
+   (batches of 50, 250 ms delay, exponential back-off on 429 / 5xx).
+4. Upserts everything into `cars_catalog`.
+
+> **Note:** Stats (speed, handling, acceleration, launch, braking) are stored as
+> integers on a **0 – 100 scale** (original 0 – 10 float × 10).  PI is stored as-is.
+
 ## Authentication & Routing
 
 Authentication uses **Supabase Auth** with email / password.  All gating is **server-side**.
@@ -101,7 +134,8 @@ supabase/
 └── migrations/
     ├── 20250209000000_core_schema.sql     # Tables, constraints, indexes
     ├── 20250209000001_rls_policies.sql    # RLS, auth trigger, helper fns
-    └── 20250209000002_rpc_functions.sql   # create_booking, cancel_booking, admin_grant_credits
+    ├── 20250209000002_rpc_functions.sql   # create_booking, cancel_booking, admin_grant_credits
+    └── 20250209000003_cars_catalog.sql    # cars_catalog table (wiki import target)
 src/
 ├── app/
 │   ├── layout.tsx             # Root layout (async navbar)
@@ -136,4 +170,6 @@ src/
 │       ├── server.ts          # Server Supabase client (cookies)
 │       └── middleware.ts      # Session refresh + route protection
 └── middleware.ts              # Next.js middleware entry point
+scripts/
+└── import_fh2_cars.ts         # Wiki car importer (server-only, uses service role)
 ```
