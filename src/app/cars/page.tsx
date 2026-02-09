@@ -2,10 +2,24 @@ import { Suspense } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { createClient } from "@/lib/supabase/server";
-import { piClassName, piClassColor, piClassRange, type PiClassName, PI_CLASSES } from "@/lib/piClass";
+import { piClassName, piClassColor } from "@/lib/piClass";
 import CarFilters from "@/components/CarFilters";
+import CompareToggleButton from "@/components/CompareToggleButton";
+import { getImageUrl } from "@/lib/supabase/getImageUrl";
+
+/** Tiny 1×1 grey pixel used as a blur placeholder while images load. */
+const BLUR_PLACEHOLDER =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN88P/BfwAJhAPkQ1sDSgAAAABJRU5ErkJggg==";
+
+/** Number of images above the fold that should load eagerly (no lazy load). */
+const PRIORITY_COUNT = 4;
 
 const PAGE_SIZE = 24;
+const HISTOGRAM_BINS = 15;
+
+// ---------------------------------------------------------------------------
+// Search params
+// ---------------------------------------------------------------------------
 
 interface Props {
   searchParams: Promise<{
@@ -14,8 +28,43 @@ interface Props {
     source_game?: string;
     q?: string;
     page?: string;
+    priceMin?: string;
+    priceMax?: string;
+    availableNow?: string;
   }>;
 }
+
+// ---------------------------------------------------------------------------
+// Helper: build non-price filter predicates on a Supabase query
+// ---------------------------------------------------------------------------
+
+type Params = Awaited<Props["searchParams"]>;
+
+function applyBaseFilters<T extends { eq: Function; or: Function }>(
+  query: T,
+  params: Params
+): T {
+  if (params.manufacturer) {
+    query = query.eq("manufacturer", params.manufacturer) as T;
+  }
+  if (params.class) {
+    query = query.eq("class", params.class) as T;
+  }
+  if (params.source_game) {
+    query = query.eq("source_game", params.source_game) as T;
+  }
+  if (params.q) {
+    const safe = params.q.replace(/"/g, "");
+    query = query.or(
+      `manufacturer.ilike."%${safe}%",model.ilike."%${safe}%"`
+    ) as T;
+  }
+  return query;
+}
+
+// ---------------------------------------------------------------------------
+// Data fetchers
+// ---------------------------------------------------------------------------
 
 /** Fetch distinct manufacturer names for the filter dropdown. */
 async function getManufacturers() {
@@ -38,6 +87,79 @@ async function getSourceGames() {
   return Array.from(new Set((data ?? []).map((r) => r.source_game as string)));
 }
 
+/**
+ * Fetch all starting_price values for the current non-price filters.
+ * Used to compute histogram buckets + overall min/max on the server.
+ */
+async function getPriceStats(params: Params) {
+  const supabase = await createClient();
+  let query = supabase
+    .from("car_models_with_price")
+    .select("starting_price")
+    .not("starting_price", "is", null);
+
+  query = applyBaseFilters(query, params);
+
+  const { data } = await query;
+  const prices = (data ?? [])
+    .map((r) => r.starting_price as number)
+    .filter((p) => p != null);
+
+  if (prices.length === 0) {
+    return { min: 0, max: 0, histogram: [] as { bucketMin: number; bucketMax: number; count: number }[] };
+  }
+
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+
+  // Single value → one bin
+  if (min === max) {
+    return {
+      min,
+      max,
+      histogram: [{ bucketMin: min, bucketMax: max, count: prices.length }],
+    };
+  }
+
+  const binWidth = (max - min) / HISTOGRAM_BINS;
+  const bins = Array.from({ length: HISTOGRAM_BINS }, (_, i) => ({
+    bucketMin: Math.round(min + i * binWidth),
+    bucketMax: Math.round(min + (i + 1) * binWidth),
+    count: 0,
+  }));
+
+  for (const price of prices) {
+    const idx = Math.min(
+      Math.floor((price - min) / binWidth),
+      HISTOGRAM_BINS - 1
+    );
+    bins[idx].count++;
+  }
+
+  return { min, max, histogram: bins };
+}
+
+/** Resolve best display URL: thumb (storage) > original (storage) > image_url (e.g. wiki). */
+async function resolveCarDisplayImageUrl(car: {
+  thumb_path?: string | null;
+  image_path?: string | null;
+  image_url?: string | null;
+}): Promise<string | null> {
+  if (car.thumb_path) {
+    const url = await getImageUrl(car.thumb_path);
+    if (url) return url;
+  }
+  if (car.image_path) {
+    const url = await getImageUrl(car.image_path);
+    if (url) return url;
+  }
+  return car.image_url ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
 export default async function CarsPage({ searchParams }: Props) {
   const params = await searchParams;
   const parsed = parseInt(params.page ?? "1", 10);
@@ -46,42 +168,49 @@ export default async function CarsPage({ searchParams }: Props) {
 
   const supabase = await createClient();
 
-  // --- Build the query ---
+  // --- Build the query against the price-enriched view ---
   let query = supabase
-    .from("car_models")
+    .from("car_models_with_price")
     .select("*", { count: "exact" })
     .order("manufacturer")
     .order("model")
     .range(offset, offset + PAGE_SIZE - 1);
 
-  if (params.manufacturer) {
-    query = query.eq("manufacturer", params.manufacturer);
+  // Non-price filters
+  query = applyBaseFilters(query, params);
+
+  // Price filters
+  const priceMinVal = parseInt(params.priceMin ?? "", 10);
+  const priceMaxVal = parseInt(params.priceMax ?? "", 10);
+  if (Number.isFinite(priceMinVal)) {
+    query = query.gte("starting_price", priceMinVal);
+  }
+  if (Number.isFinite(priceMaxVal)) {
+    query = query.lte("starting_price", priceMaxVal);
   }
 
-  if (params.class) {
-    const [min, max] = piClassRange(params.class as PiClassName);
-    query = query.gte("stat_pi", min).lte("stat_pi", max);
+  // Available now filter
+  if (params.availableNow === "true") {
+    query = query.gt("available_unit_count", 0);
   }
 
-  if (params.source_game) {
-    query = query.eq("source_game", params.source_game);
-  }
-
-  if (params.q) {
-    // Wrap search value in double-quotes so PostgREST treats commas,
-    // periods, and parentheses as literal characters — prevents filter
-    // injection via crafted query strings.
-    const safe = params.q.replace(/"/g, "");
-    query = query.or(
-      `manufacturer.ilike."%${safe}%",model.ilike."%${safe}%"`
-    );
-  }
-
-  const [{ data: cars, count }, manufacturers, sourceGames] = await Promise.all(
-    [query, getManufacturers(), getSourceGames()]
-  );
+  const [{ data: cars, count }, manufacturers, sourceGames, priceStats] =
+    await Promise.all([
+      query,
+      getManufacturers(),
+      getSourceGames(),
+      getPriceStats(params),
+    ]);
 
   const totalPages = Math.ceil((count ?? 0) / PAGE_SIZE);
+
+  // Resolve display URLs (thumb or original from Storage, else wiki image_url)
+  const carsWithUrls = await Promise.all(
+    (cars ?? []).map(async (c) => ({
+      ...c,
+      displayImageUrl: await resolveCarDisplayImageUrl(c),
+    }))
+  );
 
   return (
     <section className="mx-auto max-w-7xl px-6 py-10">
@@ -97,13 +226,17 @@ export default async function CarsPage({ searchParams }: Props) {
 
       {/* Filters */}
       <Suspense>
-        <CarFilters manufacturers={manufacturers} sourceGames={sourceGames} />
+        <CarFilters
+          manufacturers={manufacturers}
+          sourceGames={sourceGames}
+          priceStats={priceStats}
+        />
       </Suspense>
 
       {/* Grid */}
-      {cars && cars.length > 0 ? (
+      {carsWithUrls.length > 0 ? (
         <div className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {cars.map((car) => (
+          {carsWithUrls.map((car, idx) => (
             <Link
               key={car.id}
               href={`/cars/${car.id}`}
@@ -111,13 +244,16 @@ export default async function CarsPage({ searchParams }: Props) {
             >
               {/* Image */}
               <div className="relative aspect-[16/10] w-full bg-gray-100">
-                {car.image_url ? (
+                {car.displayImageUrl ? (
                   <Image
-                    src={car.image_url}
+                    src={car.displayImageUrl}
                     alt={`${car.manufacturer ?? ""} ${car.model ?? ""}`}
                     fill
                     sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
                     className="object-cover transition-transform duration-300 group-hover:scale-105"
+                    placeholder="blur"
+                    blurDataURL={BLUR_PLACEHOLDER}
+                    priority={idx < PRIORITY_COUNT}
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center text-gray-300">
@@ -126,6 +262,28 @@ export default async function CarsPage({ searchParams }: Props) {
                     </svg>
                   </div>
                 )}
+
+                {/* Availability badge (top-right overlay) */}
+                {car.available_unit_count > 0 && (
+                  <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-emerald-600/90 px-2 py-0.5 text-[11px] font-semibold text-white shadow-sm backdrop-blur-sm">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+                    {car.available_unit_count} available
+                  </div>
+                )}
+
+                {/* Compare toggle (bottom-left overlay) */}
+                <div className="absolute bottom-2 left-2 z-10">
+                  <CompareToggleButton
+                    car={{
+                      id: car.id,
+                      display_name: car.display_name,
+                      manufacturer: car.manufacturer,
+                      model: car.model,
+                      image_url: car.displayImageUrl ?? car.image_url ?? null,
+                    }}
+                    small
+                  />
+                </div>
               </div>
 
               {/* Info */}
@@ -137,9 +295,9 @@ export default async function CarsPage({ searchParams }: Props) {
                   {car.model ?? car.display_name}
                 </p>
 
-                {car.suggested_credits_per_hour != null && (
+                {car.starting_price != null && (
                   <p className="mt-2 text-sm font-semibold text-emerald-700">
-                    {car.suggested_credits_per_hour} cr/hr
+                    from {car.starting_price} cr/hr
                   </p>
                 )}
 
@@ -170,7 +328,7 @@ export default async function CarsPage({ searchParams }: Props) {
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <nav className="mt-10 flex items-center justify-center gap-2">
+        <nav className="mt-10 flex items-center justify-center gap-2 pb-20">
           <PaginationLink
             page={currentPage - 1}
             disabled={currentPage <= 1}
@@ -188,6 +346,7 @@ export default async function CarsPage({ searchParams }: Props) {
           />
         </nav>
       )}
+
     </section>
   );
 }

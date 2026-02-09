@@ -1,0 +1,40 @@
+{
+  "name": "forzacars-rentals",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "import:fh2": "tsx scripts/import_fh2_cars.ts",
+    "import:fh2:dry": "tsx scripts/import_fh2_cars.ts --dry-run",
+    "debug:classes": "tsx scripts/debug_class_counts.ts",
+    "test:pricing": "tsx scripts/test_pricing.ts"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.8.0",
+    "@supabase/supabase-js": "^2.95.3",
+    "cheerio": "^1.2.0",
+    "dotenv": "^17.2.4",
+    "next": "^16.1.6",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "resend": "^6.9.1",
+    "sharp": "^0.33.5",
+    "zod": "^4.3.6",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "^16.1.6",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.5.0"
+  }
+}

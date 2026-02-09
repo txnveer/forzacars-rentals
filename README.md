@@ -110,6 +110,95 @@ What the script does:
 > **Note:** Stats (speed, handling, acceleration, launch, braking) are stored as
 > integers on a **0 – 100 scale** (original 0 – 10 float × 10).  PI is stored as-is.
 
+### Suggested pricing
+
+Each scraped car model gets a **suggested rental price** (`suggested_credits_per_hour`)
+computed by a deterministic heuristic in the import script:
+
+1. A 0–1 "desirability score" is computed from the car's PI and stat values
+   (70 % PI weight, 30 % stats average), normalised against the dataset min/max.
+2. The score is mapped linearly to the **[10, 100] cr/hr** band and rounded to
+   the nearest 5.
+
+| Class | Typical range |
+|-------|---------------|
+| D     | 10–20 cr/hr   |
+| C     | 15–30 cr/hr   |
+| B     | 25–45 cr/hr   |
+| A     | 40–60 cr/hr   |
+| S1    | 55–75 cr/hr   |
+| S2    | 70–90 cr/hr   |
+| X     | 85–100 cr/hr  |
+
+> **Note:** These are *suggestions only*. Business users can override the price
+> per unit via `car_units.credits_per_hour`. The booking RPC uses
+> `COALESCE(unit override, model suggestion)` to compute the actual charge.
+
+The baseline was originally 50–300 cr/hr and was scaled down by ~0.30× in
+migration `20250209000010_scale_down_pricing` to better fit the game-themed
+credit economy.
+
+### Class normalization
+
+The `car_models.class` column stores the canonical performance class derived from
+`stat_pi`.  Migration `20250209000007_normalize_class` populates this for all
+existing rows; the import script sets it for new rows on every run.
+
+| Class | PI range |
+|-------|----------|
+| D     | ≤ 500    |
+| C     | 501–600  |
+| B     | 601–700  |
+| A     | 701–800  |
+| S1    | 801–900  |
+| S2    | 901–998  |
+| X     | 999+     |
+
+Filtering on `/cars` uses `class = 'S2'` (exact match) rather than PI-range
+arithmetic, which eliminates edge-case mismatches at class boundaries.
+
+To verify class distribution after applying migrations:
+
+```bash
+npm run debug:classes
+```
+
+## Car image thumbnails
+
+Car images can be stored in **Supabase Storage** (bucket `car-images`) instead of
+or in addition to external URLs (e.g. wiki `image_url`). The app supports:
+
+- **Original image:** stored at a path in `car-images` (e.g. `originals/<id>.jpg`).
+  The `car_models.image_path` column holds this path.
+- **Thumbnail:** a small square WEBP (128×128, cover crop) generated from the
+  original and stored under `car-images/thumbs/` (e.g. `thumbs/<id>.webp`).
+  The `car_models.thumb_path` column holds this path.
+
+URLs are generated **server-side only** via signed URLs (1 h expiry); never
+create signed URLs in client code.
+
+### Bucket setup
+
+1. In the Supabase dashboard, go to **Storage** and create a bucket named `car-images`.
+2. You can leave the bucket **private**; the app uses the service-role key to
+   create signed URLs when serving images. (Public bucket is also supported;
+   the server helper can be extended to return public URLs when the bucket is public.)
+3. Ensure RLS policies allow your backend (service role) to read and write;
+   the ensure-thumb API and any upload flows use the service-role client.
+
+### Lazy thumbnail generation
+
+If a car model has `image_path` but no `thumb_path`, a thumbnail can be generated
+on demand:
+
+- **GET** `/api/cars/[id]/ensure-thumb` — fetches the car, downloads the original
+  from Storage, generates a WEBP thumbnail with [sharp](https://sharp.pixelplumbing.com/),
+  uploads it to `thumbs/<id>.webp`, updates `car_models.thumb_path`, and returns
+  `{ thumb_url }`. Rate limited per IP; id must be a valid UUID.
+
+The compare tray and car list use the best available image: thumbnail URL (from
+`thumb_path`) → original URL (from `image_path`) → wiki `image_url` → placeholder.
+
 ## Managing Inventory Units (Business Portal)
 
 Business users can manage their car-unit inventory at `/biz/inventory`.

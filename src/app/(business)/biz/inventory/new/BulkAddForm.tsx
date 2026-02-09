@@ -5,6 +5,9 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { bulkCreateUnits, type BulkCreateResult } from "./actions";
 
+const BLUR_PLACEHOLDER =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN88P/BfwAJhAPkQ1sDSgAAAABJRU5ErkJggg==";
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -232,6 +235,8 @@ export default function BulkAddForm({ models }: { models: CarModel[] }) {
                       width={56}
                       height={36}
                       className="rounded object-cover"
+                      placeholder="blur"
+                      blurDataURL={BLUR_PLACEHOLDER}
                     />
                   ) : (
                     <div className="flex h-9 w-14 items-center justify-center rounded bg-gray-100 text-[10px] text-gray-300">
@@ -265,6 +270,8 @@ export default function BulkAddForm({ models }: { models: CarModel[] }) {
                 width={120}
                 height={75}
                 className="rounded-lg object-cover"
+                placeholder="blur"
+                blurDataURL={BLUR_PLACEHOLDER}
               />
             ) : (
               <div className="flex h-[75px] w-[120px] items-center justify-center rounded-lg bg-gray-100 text-xs text-gray-300">

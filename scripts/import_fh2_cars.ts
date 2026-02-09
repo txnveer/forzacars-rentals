@@ -11,7 +11,8 @@
  * Requires NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.local
  */
 
-import "dotenv/config";
+import { config } from "dotenv";
+config({ path: ".env.local" });
 import * as cheerio from "cheerio";
 import { createClient } from "@supabase/supabase-js";
 
@@ -57,6 +58,7 @@ interface CatalogCar {
   wiki_page_title: string;
   wiki_page_url: string;
   image_url: string | null;
+  class: string | null;
   stat_speed: number | null;
   stat_handling: number | null;
   stat_acceleration: number | null;
@@ -112,10 +114,31 @@ function parseStat(text: string): number | null {
 
 /**
  * Parse the PI cell text (e.g. "S2 998", "D 100") into a plain integer.
+ *
+ * Forza PI is always a 3-digit number (100–999).  The wiki cell may
+ * concatenate the class prefix with the number without a space
+ * (e.g. "S1801" instead of "S1 801").  Using exactly 3 trailing digits
+ * avoids the greedy match that would turn "S1801" into 1801.
  */
 function parsePi(text: string): number | null {
-  const m = text.match(/(\d+)\s*$/);
+  // Match exactly the last 3-digit group — covers "S2 998", "S2998", "D 100"
+  const m = text.match(/(\d{3})\s*$/);
   return m ? parseInt(m[1], 10) : null;
+}
+
+/**
+ * Derive the canonical performance class from a PI value.
+ * Must stay in sync with the SQL migration and piClass.ts.
+ */
+function piToClass(pi: number | null): string | null {
+  if (pi == null) return null;
+  if (pi >= 999) return "X";
+  if (pi >= 901) return "S2";
+  if (pi >= 801) return "S1";
+  if (pi >= 701) return "A";
+  if (pi >= 601) return "B";
+  if (pi >= 501) return "C";
+  return "D";
 }
 
 /**
@@ -296,6 +319,7 @@ function parseCarsTable(html: string): CatalogCar[] {
         wiki_page_title: wikiPageTitle,
         wiki_page_url: `${WIKI_BASE}${encodeURIComponent(wikiPageTitle.replace(/ /g, "_"))}`,
         image_url: null, // filled in next step
+        class: piToClass(pi),
         stat_speed: speed,
         stat_handling: handling,
         stat_acceleration: acceleration,
@@ -410,11 +434,16 @@ function attachImages(
 //
 //   3. Map score → credits/hour:
 //      suggested = MIN_PRICE + score * (MAX_PRICE - MIN_PRICE)
-//      Round to nearest 10, clamp to [MIN_PRICE, MAX_PRICE].
+//      Round to nearest 5, clamp to [MIN_PRICE, MAX_PRICE].
+//
+//   Band: [10, 100] cr/hr.
+//     10 — economy D-class cars
+//    100 — top-tier X-class exotics
+//   Businesses can override per unit via car_units.credits_per_hour.
 // ---------------------------------------------------------------------------
 
-const MIN_PRICE = 50;
-const MAX_PRICE = 300;
+const MIN_PRICE = 10;
+const MAX_PRICE = 100;
 
 /** Compute min & max of a numeric array, ignoring nulls. */
 function minMax(values: (number | null)[]): [number, number] | null {
@@ -476,9 +505,9 @@ function computePricing(cars: CatalogCar[]): void {
       score = 0.5;
     }
 
-    // Map score to price, round to nearest 10, clamp
+    // Map score to price, round to nearest 5, clamp
     const raw = MIN_PRICE + score * (MAX_PRICE - MIN_PRICE);
-    const rounded = Math.round(raw / 10) * 10;
+    const rounded = Math.round(raw / 5) * 5;
     car.suggested_credits_per_hour = Math.max(MIN_PRICE, Math.min(MAX_PRICE, rounded));
     priced++;
   }
@@ -562,25 +591,36 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // 1b. Deduplicate by (source, source_game, wiki_page_title) — keep last occurrence
+  const deduped = new Map<string, CatalogCar>();
+  for (const car of cars) {
+    const key = `${car.source}|${car.source_game}|${car.wiki_page_title}`;
+    deduped.set(key, car); // last one wins
+  }
+  const uniqueCars = Array.from(deduped.values());
+  if (uniqueCars.length < cars.length) {
+    console.log(`  ⚠ Removed ${cars.length - uniqueCars.length} duplicate(s) — ${uniqueCars.length} unique cars`);
+  }
+
   // 2. Fetch images
-  const imageMap = await fetchImages(cars);
-  attachImages(cars, imageMap);
+  const imageMap = await fetchImages(uniqueCars);
+  attachImages(uniqueCars, imageMap);
 
   // 3. Compute suggested rental pricing
-  computePricing(cars);
+  computePricing(uniqueCars);
 
   // 4. Summary
   console.log("\n--- Summary ---");
-  console.log(`  Total cars parsed : ${cars.length}`);
-  console.log(`  With image        : ${cars.filter((c) => c.image_url).length}`);
-  console.log(`  With year         : ${cars.filter((c) => c.year).length}`);
-  console.log(`  With manufacturer : ${cars.filter((c) => c.manufacturer).length}`);
-  console.log(`  With PI           : ${cars.filter((c) => c.stat_pi != null).length}`);
-  console.log(`  With pricing      : ${cars.filter((c) => c.suggested_credits_per_hour != null).length}`);
+  console.log(`  Total cars parsed : ${cars.length} (${uniqueCars.length} unique)`);
+  console.log(`  With image        : ${uniqueCars.filter((c) => c.image_url).length}`);
+  console.log(`  With year         : ${uniqueCars.filter((c) => c.year).length}`);
+  console.log(`  With manufacturer : ${uniqueCars.filter((c) => c.manufacturer).length}`);
+  console.log(`  With PI           : ${uniqueCars.filter((c) => c.stat_pi != null).length}`);
+  console.log(`  With pricing      : ${uniqueCars.filter((c) => c.suggested_credits_per_hour != null).length}`);
 
   // Print first 5 cars as a sample
   console.log("\n--- Sample (first 5) ---");
-  for (const car of cars.slice(0, 5)) {
+  for (const car of uniqueCars.slice(0, 5)) {
     console.log(
       `  ${car.year ?? "????"} ${car.manufacturer ?? "?"} ${car.model ?? "?"} ` +
         `| PI ${car.stat_pi ?? "?"} | ${car.suggested_credits_per_hour ?? "?"} cr/hr` +
@@ -590,7 +630,7 @@ async function main(): Promise<void> {
 
   // 5. Upsert (skip in dry-run)
   if (!DRY_RUN) {
-    await upsertCars(cars);
+    await upsertCars(uniqueCars);
   }
 
   console.log("\n✅ Done!");

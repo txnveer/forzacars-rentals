@@ -5,6 +5,9 @@ import { createClient } from "@/lib/supabase/server";
 import { piClassName, piClassColor } from "@/lib/piClass";
 import ColorFilter from "./ColorFilter";
 
+const BLUR_PLACEHOLDER =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN88P/BfwAJhAPkQ1sDSgAAAABJRU5ErkJggg==";
+
 interface Props {
   params: Promise<{ id: string }>;
   searchParams: Promise<{ color?: string }>;
@@ -144,6 +147,8 @@ export default async function CarModelDetailPage({
               sizes="(max-width: 1024px) 100vw, 50vw"
               className="object-cover"
               priority
+              placeholder="blur"
+              blurDataURL={BLUR_PLACEHOLDER}
             />
           ) : (
             <div className="flex h-full items-center justify-center text-gray-300">
