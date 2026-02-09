@@ -2,7 +2,7 @@
  * scripts/import_fh2_cars.ts
  *
  * Server-only ingestion script that imports the Forza Horizon 2 car list
- * from the Forza Fandom wiki into the `cars_catalog` table.
+ * from the Forza Fandom wiki into the `car_models` table.
  *
  * Usage:
  *   npx tsx scripts/import_fh2_cars.ts            # full import
@@ -53,6 +53,7 @@ interface CatalogCar {
   year: number | null;
   manufacturer: string | null;
   model: string | null;
+  display_name: string;
   wiki_page_title: string;
   wiki_page_url: string;
   image_url: string | null;
@@ -62,6 +63,7 @@ interface CatalogCar {
   stat_launch: number | null;
   stat_braking: number | null;
   stat_pi: number | null;
+  suggested_credits_per_hour: number | null;
   source: string;
   source_game: string;
   updated_at: string;
@@ -282,10 +284,15 @@ function parseCarsTable(html: string): CatalogCar[] {
         pi = parsePi(cells.eq(n - 1).text());
       }
 
+      // display_name: "Manufacturer Model" or fallback to vehicleName
+      const displayName =
+        [manufacturer, model].filter(Boolean).join(" ") || vehicleName;
+
       cars.push({
         year,
         manufacturer,
         model,
+        display_name: displayName,
         wiki_page_title: wikiPageTitle,
         wiki_page_url: `${WIKI_BASE}${encodeURIComponent(wikiPageTitle.replace(/ /g, "_"))}`,
         image_url: null, // filled in next step
@@ -295,6 +302,7 @@ function parseCarsTable(html: string): CatalogCar[] {
         stat_launch: launch,
         stat_braking: braking,
         stat_pi: pi,
+        suggested_credits_per_hour: null, // computed after all cars are parsed
         source: SOURCE,
         source_game: SOURCE_GAME,
         updated_at: new Date().toISOString(),
@@ -385,7 +393,105 @@ function attachImages(
 }
 
 // ---------------------------------------------------------------------------
-// Step 3 — Upsert into Supabase (service-role only)
+// Step 3 — Compute suggested_credits_per_hour
+//
+// Pricing heuristic (transparent, deterministic):
+//
+//   1. Compute dataset-wide min/max for PI and each stat column
+//      (speed, handling, acceleration, launch, braking) among non-null values.
+//
+//   2. For each car compute a 0..1 "desirability score":
+//      • pi_norm  = (pi - pi_min) / (pi_max - pi_min), clamped [0, 1]
+//      • For each stat: stat_norm = (stat - stat_min) / (stat_max - stat_min)
+//      • stats_norm_avg = average of available normalized stats (skip nulls)
+//
+//      If PI exists:  score = 0.7 * pi_norm + 0.3 * stats_norm_avg
+//      If PI missing:  score = stats_norm_avg  (or 0.5 if everything missing)
+//
+//   3. Map score → credits/hour:
+//      suggested = MIN_PRICE + score * (MAX_PRICE - MIN_PRICE)
+//      Round to nearest 10, clamp to [MIN_PRICE, MAX_PRICE].
+// ---------------------------------------------------------------------------
+
+const MIN_PRICE = 50;
+const MAX_PRICE = 300;
+
+/** Compute min & max of a numeric array, ignoring nulls. */
+function minMax(values: (number | null)[]): [number, number] | null {
+  const nums = values.filter((v): v is number => v != null);
+  if (nums.length === 0) return null;
+  return [Math.min(...nums), Math.max(...nums)];
+}
+
+/** Normalize a value into 0..1 given min/max bounds. Clamps to [0,1]. */
+function norm(value: number, min: number, max: number): number {
+  if (max === min) return 0.5; // all identical → middle
+  return Math.max(0, Math.min(1, (value - min) / (max - min)));
+}
+
+function computePricing(cars: CatalogCar[]): void {
+  console.log("→ Computing suggested credits/hour…");
+
+  // 1. Dataset-wide min/max for PI and each stat column
+  const piRange = minMax(cars.map((c) => c.stat_pi));
+  const speedRange = minMax(cars.map((c) => c.stat_speed));
+  const handlingRange = minMax(cars.map((c) => c.stat_handling));
+  const accelRange = minMax(cars.map((c) => c.stat_acceleration));
+  const launchRange = minMax(cars.map((c) => c.stat_launch));
+  const brakingRange = minMax(cars.map((c) => c.stat_braking));
+
+  if (piRange) {
+    console.log(`  PI range  : ${piRange[0]} – ${piRange[1]}`);
+  }
+
+  // 2 & 3. For each car, compute score → suggested price
+  let priced = 0;
+  for (const car of cars) {
+    // Normalize each available stat
+    const statNorms: number[] = [];
+    const tryPush = (val: number | null, range: [number, number] | null) => {
+      if (val != null && range) statNorms.push(norm(val, range[0], range[1]));
+    };
+    tryPush(car.stat_speed, speedRange);
+    tryPush(car.stat_handling, handlingRange);
+    tryPush(car.stat_acceleration, accelRange);
+    tryPush(car.stat_launch, launchRange);
+    tryPush(car.stat_braking, brakingRange);
+
+    const statsNormAvg =
+      statNorms.length > 0
+        ? statNorms.reduce((a, b) => a + b, 0) / statNorms.length
+        : null;
+
+    let score: number;
+    if (car.stat_pi != null && piRange) {
+      // PI present → weighted blend: 70 % PI, 30 % stats
+      const piNorm = norm(car.stat_pi, piRange[0], piRange[1]);
+      score = 0.7 * piNorm + 0.3 * (statsNormAvg ?? piNorm);
+    } else if (statsNormAvg != null) {
+      // PI missing → stats only
+      score = statsNormAvg;
+    } else {
+      // Nothing at all → neutral mid-point
+      score = 0.5;
+    }
+
+    // Map score to price, round to nearest 10, clamp
+    const raw = MIN_PRICE + score * (MAX_PRICE - MIN_PRICE);
+    const rounded = Math.round(raw / 10) * 10;
+    car.suggested_credits_per_hour = Math.max(MIN_PRICE, Math.min(MAX_PRICE, rounded));
+    priced++;
+  }
+
+  // Quick distribution summary
+  const prices = cars.map((c) => c.suggested_credits_per_hour!);
+  const avg = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
+  console.log(`  ✓ Priced ${priced} cars (min ${Math.min(...prices)}, avg ${avg}, max ${Math.max(...prices)} cr/hr)`);
+}
+
+
+// ---------------------------------------------------------------------------
+// Step 4 — Upsert into Supabase (service-role only)
 // ---------------------------------------------------------------------------
 
 async function upsertCars(cars: CatalogCar[]): Promise<void> {
@@ -402,7 +508,7 @@ async function upsertCars(cars: CatalogCar[]): Promise<void> {
     auth: { persistSession: false },
   });
 
-  console.log(`→ Upserting ${cars.length} rows into cars_catalog…`);
+  console.log(`→ Upserting ${cars.length} rows into car_models…`);
 
   // Supabase JS client handles batching internally, but we chunk at
   // 200 to keep request payloads reasonable.
@@ -414,7 +520,7 @@ async function upsertCars(cars: CatalogCar[]): Promise<void> {
     const batch = cars.slice(i, i + CHUNK);
 
     const { data, error } = await supabase
-      .from("cars_catalog")
+      .from("car_models")
       .upsert(batch, {
         onConflict: "source,source_game,wiki_page_title",
         ignoreDuplicates: false,
@@ -460,24 +566,29 @@ async function main(): Promise<void> {
   const imageMap = await fetchImages(cars);
   attachImages(cars, imageMap);
 
-  // 3. Summary
+  // 3. Compute suggested rental pricing
+  computePricing(cars);
+
+  // 4. Summary
   console.log("\n--- Summary ---");
   console.log(`  Total cars parsed : ${cars.length}`);
   console.log(`  With image        : ${cars.filter((c) => c.image_url).length}`);
   console.log(`  With year         : ${cars.filter((c) => c.year).length}`);
   console.log(`  With manufacturer : ${cars.filter((c) => c.manufacturer).length}`);
   console.log(`  With PI           : ${cars.filter((c) => c.stat_pi != null).length}`);
+  console.log(`  With pricing      : ${cars.filter((c) => c.suggested_credits_per_hour != null).length}`);
 
   // Print first 5 cars as a sample
   console.log("\n--- Sample (first 5) ---");
   for (const car of cars.slice(0, 5)) {
     console.log(
       `  ${car.year ?? "????"} ${car.manufacturer ?? "?"} ${car.model ?? "?"} ` +
-        `| PI ${car.stat_pi ?? "?"} | img ${car.image_url ? "✓" : "✗"}`
+        `| PI ${car.stat_pi ?? "?"} | ${car.suggested_credits_per_hour ?? "?"} cr/hr` +
+        ` | img ${car.image_url ? "✓" : "✗"}`
     );
   }
 
-  // 4. Upsert (skip in dry-run)
+  // 5. Upsert (skip in dry-run)
   if (!DRY_RUN) {
     await upsertCars(cars);
   }

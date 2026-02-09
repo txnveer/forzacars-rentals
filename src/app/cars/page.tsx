@@ -21,7 +21,7 @@ interface Props {
 async function getManufacturers() {
   const supabase = await createClient();
   const { data } = await supabase
-    .from("cars_catalog")
+    .from("car_models")
     .select("manufacturer")
     .not("manufacturer", "is", null)
     .order("manufacturer");
@@ -32,7 +32,7 @@ async function getManufacturers() {
 async function getSourceGames() {
   const supabase = await createClient();
   const { data } = await supabase
-    .from("cars_catalog")
+    .from("car_models")
     .select("source_game")
     .order("source_game");
   return Array.from(new Set((data ?? []).map((r) => r.source_game as string)));
@@ -40,14 +40,15 @@ async function getSourceGames() {
 
 export default async function CarsPage({ searchParams }: Props) {
   const params = await searchParams;
-  const currentPage = Math.max(1, parseInt(params.page ?? "1", 10));
+  const parsed = parseInt(params.page ?? "1", 10);
+  const currentPage = Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
   const offset = (currentPage - 1) * PAGE_SIZE;
 
   const supabase = await createClient();
 
   // --- Build the query ---
   let query = supabase
-    .from("cars_catalog")
+    .from("car_models")
     .select("*", { count: "exact" })
     .order("manufacturer")
     .order("model")
@@ -67,8 +68,12 @@ export default async function CarsPage({ searchParams }: Props) {
   }
 
   if (params.q) {
+    // Wrap search value in double-quotes so PostgREST treats commas,
+    // periods, and parentheses as literal characters — prevents filter
+    // injection via crafted query strings.
+    const safe = params.q.replace(/"/g, "");
     query = query.or(
-      `manufacturer.ilike.%${params.q}%,model.ilike.%${params.q}%`
+      `manufacturer.ilike."%${safe}%",model.ilike."%${safe}%"`
     );
   }
 
@@ -129,10 +134,16 @@ export default async function CarsPage({ searchParams }: Props) {
                   {car.manufacturer}
                 </p>
                 <p className="mt-0.5 font-semibold text-gray-900 line-clamp-1">
-                  {car.model ?? car.wiki_page_title}
+                  {car.model ?? car.display_name}
                 </p>
 
-                <div className="mt-3 flex items-center justify-between">
+                {car.suggested_credits_per_hour != null && (
+                  <p className="mt-2 text-sm font-semibold text-emerald-700">
+                    {car.suggested_credits_per_hour} cr/hr
+                  </p>
+                )}
+
+                <div className="mt-2 flex items-center justify-between">
                   <span className="text-sm text-gray-500">{car.year}</span>
 
                   {car.stat_pi != null && (
