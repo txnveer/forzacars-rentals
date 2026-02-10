@@ -4,6 +4,8 @@ A car-rental web app built with **Next.js 14+** (App Router), **TypeScript**, an
 
 ## Getting Started
 
+### Local Development
+
 ```bash
 # Install dependencies
 npm install
@@ -16,6 +18,14 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### Production Deployment
+
+See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for complete step-by-step instructions to deploy to production using:
+- **Vercel** (Next.js hosting)
+- **Supabase** (Database + Auth + Storage)
+
+Quick deployment checklist: **[DEPLOYMENT_CHECKLIST.md](./DEPLOYMENT_CHECKLIST.md)**
 
 ## Environment Variables
 
