@@ -6,7 +6,7 @@
   "installCommand": "npm install",
   "outputDirectory": ".next",
   "env": {
-    "TZ": "America/Chicago"
+    "APP_TZ": "America/Chicago"
   },
   "headers": [
     {
