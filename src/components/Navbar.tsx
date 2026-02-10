@@ -3,145 +3,107 @@ import { getProfile } from "@/lib/auth/getProfile";
 import { signOut } from "@/lib/auth/actions";
 
 /**
- * Role-aware server-side navbar.
+ * Role-aware server-side navbar with 3-zone layout.
  *
- * Fetches the current user's profile (cached per-request via React
- * `cache()`).  Shows public links for guests and role-specific links
- * for authenticated users.
+ * Layout: [Brand] [Nav Links] [User Controls]
+ * Uses CSS Grid for proper alignment across all user states.
  */
 export default async function Navbar() {
   const profile = await getProfile();
 
+  // Determine badge class based on role
+  const getBadgeClass = (role: string) => {
+    switch (role) {
+      case "ADMIN":
+        return "badge-admin";
+      case "BUSINESS":
+        return "badge-business";
+      default:
+        return "badge-customer";
+    }
+  };
+
   return (
-    <nav className="border-b border-gray-200 bg-white">
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-        {/* ---- Brand ---- */}
+    <nav className="sticky top-0 z-50 h-16 border-b border-gray-200 bg-white/95 backdrop-blur-sm">
+      <div className="mx-auto grid h-full max-w-7xl grid-cols-[auto_1fr_auto] items-center gap-4 px-6">
+        {/* ================================================================
+            LEFT ZONE: Brand/Logo
+            ================================================================ */}
         <Link
           href="/"
-          className="text-xl font-bold tracking-tight text-gray-900"
+          className="font-display text-xl tracking-tight text-primary"
         >
-          ForzaCars Rentals
+          ForzaCars
         </Link>
 
-        {/* ---- Right-side links ---- */}
-        <div className="flex items-center gap-6">
-          {/* Public link — visible to everyone */}
-          <Link
-            href="/cars"
-            className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
-          >
-            Cars
-          </Link>
+        {/* ================================================================
+            CENTER ZONE: Primary Navigation Links
+            ================================================================ */}
+        <div className="flex items-center justify-center gap-1">
+          {/* Cars - visible to everyone */}
+          <NavLink href="/cars">Cars</NavLink>
 
-          {profile ? (
+          {profile && (
             <>
-              {/* CUSTOMER links */}
+              {/* CUSTOMER navigation */}
               {profile.role === "CUSTOMER" && (
                 <>
-                  <Link
-                    href="/bookings"
-                    className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
-                  >
-                    Bookings
-                  </Link>
-                  <Link
-                    href="/wallet"
-                    className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
-                  >
-                    Wallet
-                  </Link>
+                  <NavLink href="/bookings">Bookings</NavLink>
+                  <NavLink href="/wallet">Wallet</NavLink>
                 </>
               )}
 
-              {/* BUSINESS links */}
+              {/* BUSINESS navigation */}
               {profile.role === "BUSINESS" && (
                 <>
-                  <Link
-                    href="/biz/fleet"
-                    className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
-                  >
-                    Fleet
-                  </Link>
-                  <Link
-                    href="/biz/inventory"
-                    className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
-                  >
-                    Inventory
-                  </Link>
-                  <Link
-                    href="/biz/cars"
-                    className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
-                  >
-                    My Cars
-                  </Link>
-                  <Link
-                    href="/biz/blackouts"
-                    className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
-                  >
-                    Blackouts
-                  </Link>
-                  <Link
-                    href="/biz/bookings"
-                    className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
-                  >
-                    Bookings
-                  </Link>
+                  <NavLink href="/biz/fleet">Fleet</NavLink>
+                  <NavLink href="/biz/bookings">Bookings</NavLink>
+                  <NavLink href="/biz/blackouts">Blackouts</NavLink>
                 </>
               )}
 
-              {/* ADMIN links */}
+              {/* ADMIN navigation */}
               {profile.role === "ADMIN" && (
                 <>
-                  <Link
-                    href="/admin/users"
-                    className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
-                  >
-                    Users
-                  </Link>
-                  <Link
-                    href="/admin/businesses"
-                    className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
-                  >
-                    Businesses
-                  </Link>
-                  <Link
-                    href="/admin/audit"
-                    className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
-                  >
-                    Audit Log
-                  </Link>
+                  <NavLink href="/admin/users">Users</NavLink>
+                  <NavLink href="/admin/businesses">Businesses</NavLink>
+                  <NavLink href="/admin/audit">Audit</NavLink>
                 </>
               )}
 
-              {/* Messages link (all authenticated users) */}
-              <Link
-                href="/messages"
-                className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
-              >
-                Messages
-              </Link>
+              {/* Shared authenticated links */}
+              <NavLink href="/messages">Messages</NavLink>
+              <NavLink href="/profile">Profile</NavLink>
+            </>
+          )}
+        </div>
 
-              {/* Profile link */}
-              <Link
-                href="/profile"
-                className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
-              >
-                Profile
-              </Link>
-
-              {/* Role badge + email */}
-              <span className="hidden text-xs text-gray-400 sm:inline">
-                {profile.email}
-                <span className="ml-1.5 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+        {/* ================================================================
+            RIGHT ZONE: User Info + Auth Controls
+            ================================================================ */}
+        <div className="flex items-center gap-3">
+          {profile ? (
+            <>
+              {/* User info: truncated email + role badge */}
+              <div className="hidden items-center gap-2 sm:flex">
+                <span className="max-w-[140px] truncate text-sm text-gray-600">
+                  {profile.email}
+                </span>
+                <span className={getBadgeClass(profile.role)}>
                   {profile.role}
                 </span>
+              </div>
+
+              {/* Mobile: just show badge */}
+              <span className={`sm:hidden ${getBadgeClass(profile.role)}`}>
+                {profile.role}
               </span>
 
-              {/* Sign out */}
+              {/* Sign out button - compact secondary style */}
               <form action={signOut}>
                 <button
                   type="submit"
-                  className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                  className="h-9 rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
                 >
                   Sign out
                 </button>
@@ -149,16 +111,16 @@ export default async function Navbar() {
             </>
           ) : (
             <>
-              {/* Guest links */}
+              {/* Guest: Login + Sign up */}
               <Link
                 href="/login"
-                className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900"
+                className="h-9 rounded-lg px-4 text-sm font-medium text-gray-600 transition-colors hover:text-primary flex items-center"
               >
                 Log in
               </Link>
               <Link
                 href="/signup"
-                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
+                className="h-9 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition-colors hover:bg-primary-600 flex items-center"
               >
                 Sign up
               </Link>
@@ -167,5 +129,25 @@ export default async function Navbar() {
         </div>
       </div>
     </nav>
+  );
+}
+
+/**
+ * Navigation link component with consistent styling.
+ */
+function NavLink({
+  href,
+  children,
+}: {
+  href: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      className="nav-link rounded-md hover:bg-sky-light/50"
+    >
+      {children}
+    </Link>
   );
 }

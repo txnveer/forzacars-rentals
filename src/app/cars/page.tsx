@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { piClassName, piClassColor } from "@/lib/piClass";
 import CarFilters from "@/components/CarFilters";
 import CompareToggleButton from "@/components/CompareToggleButton";
+import { PriceCompact } from "@/components/PriceDisplay";
 import { getImageUrl } from "@/lib/supabase/getImageUrl";
 
 /** Tiny 1×1 grey pixel used as a blur placeholder while images load. */
@@ -168,10 +169,16 @@ export default async function CarsPage({ searchParams }: Props) {
 
   const supabase = await createClient();
 
+  // Default availableNow to true if not explicitly set
+  // This means first-time visitors see available cars by default
+  const showAvailableOnly = params.availableNow !== "false" && params.availableNow !== "0";
+
   // --- Build the query against the price-enriched view ---
+  // Sort by availability first (available cars on top), then by manufacturer/model
   let query = supabase
     .from("car_models_with_price")
     .select("*", { count: "exact" })
+    .order("available_unit_count", { ascending: false, nullsFirst: false })
     .order("manufacturer")
     .order("model")
     .range(offset, offset + PAGE_SIZE - 1);
@@ -189,8 +196,8 @@ export default async function CarsPage({ searchParams }: Props) {
     query = query.lte("starting_price", priceMaxVal);
   }
 
-  // Available now filter
-  if (params.availableNow === "true") {
+  // Available now filter (default ON)
+  if (showAvailableOnly) {
     query = query.gt("available_unit_count", 0);
   }
 
@@ -240,7 +247,7 @@ export default async function CarsPage({ searchParams }: Props) {
             <Link
               key={car.id}
               href={`/cars/${car.id}`}
-              className="group overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition-shadow hover:shadow-md"
+              className="card group overflow-hidden transition-all hover:shadow-md hover:border-sky-light"
             >
               {/* Image */}
               <div className="relative aspect-[16/10] w-full bg-gray-100">
@@ -265,8 +272,8 @@ export default async function CarsPage({ searchParams }: Props) {
 
                 {/* Availability badge (top-right overlay) */}
                 {car.available_unit_count > 0 && (
-                  <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-emerald-600/90 px-2 py-0.5 text-[11px] font-semibold text-white shadow-sm backdrop-blur-sm">
-                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+                  <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-accent-sand px-2 py-0.5 text-[11px] font-bold text-gray-900 shadow-sm">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent-caramel animate-pulse" />
                     {car.available_unit_count} available
                   </div>
                 )}
@@ -296,9 +303,11 @@ export default async function CarsPage({ searchParams }: Props) {
                 </p>
 
                 {car.starting_price != null && (
-                  <p className="mt-2 text-sm font-semibold text-emerald-700">
-                    from {car.starting_price} cr/hr
-                  </p>
+                  <PriceCompact
+                    hourlyRate={car.starting_price}
+                    marketHourlyRate={car.suggested_credits_per_hour}
+                    isAvailable={(car.available_unit_count ?? 0) > 0}
+                  />
                 )}
 
                 <div className="mt-2 flex items-center justify-between">

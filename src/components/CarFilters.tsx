@@ -55,9 +55,12 @@ export default function CarFilters({
   const hasPriceData = PRICE_MIN > 0 && PRICE_MAX > 0 && PRICE_MAX > PRICE_MIN;
 
   // "More filters" panel open / closed
+  // Open if user has explicitly toggled availability OFF or set price filters
   const [moreOpen, setMoreOpen] = useState(() => {
+    const availParam = searchParams.get("availableNow");
+    const hasExplicitAvailOff = availParam === "false" || availParam === "0";
     return !!(
-      searchParams.get("availableNow") ||
+      hasExplicitAvailOff ||
       searchParams.get("priceMin") ||
       searchParams.get("priceMax")
     );
@@ -95,7 +98,9 @@ export default function CarFilters({
   const current = (key: string) => searchParams.get(key) ?? "";
 
   const search = current("q");
-  const availableNow = current("availableNow") === "true";
+  // Default availableNow to true unless explicitly set to "false" or "0"
+  const availableNowParam = searchParams.get("availableNow");
+  const availableNow = availableNowParam !== "false" && availableNowParam !== "0";
 
   // Parse price params, clamped to server-provided bounds
   const priceMinParam = parseInt(current("priceMin"), 10);
@@ -109,9 +114,9 @@ export default function CarFilters({
       ? Math.max(PRICE_MIN, Math.min(priceMaxParam, PRICE_MAX))
       : PRICE_MAX;
 
-  // Badge count
+  // Badge count - only count availability if explicitly turned OFF (since ON is default)
   const moreActiveCount =
-    (availableNow ? 1 : 0) +
+    (!availableNow ? 1 : 0) +
     (priceMin > PRICE_MIN ? 1 : 0) +
     (priceMax < PRICE_MAX ? 1 : 0);
 
@@ -241,10 +246,10 @@ export default function CarFilters({
                 role="switch"
                 aria-checked={availableNow}
                 onClick={() =>
-                  updateParam("availableNow", availableNow ? "" : "true")
+                  updateParam("availableNow", availableNow ? "false" : "")
                 }
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 ${
-                  availableNow ? "bg-gray-900" : "bg-gray-200"
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50 focus:ring-offset-2 ${
+                  availableNow ? "bg-primary" : "bg-gray-300"
                 }`}
               >
                 <span
@@ -254,7 +259,7 @@ export default function CarFilters({
                 />
               </button>
               <span className="text-xs text-gray-500">
-                {availableNow ? "Showing available only" : "Showing all"}
+                {availableNow ? "Available now" : "Show all cars"}
               </span>
             </div>
 
@@ -284,7 +289,7 @@ export default function CarFilters({
                         <div
                           key={i}
                           className={`flex-1 rounded-t transition-colors ${
-                            inRange ? "bg-gray-700" : "bg-gray-200"
+                            inRange ? "bg-primary" : "bg-gray-200"
                           }`}
                           style={{ height: `${pct}%` }}
                           title={`${bucket.bucketMin}–${bucket.bucketMax} cr/hr: ${bucket.count} car${bucket.count !== 1 ? "s" : ""}`}
@@ -299,7 +304,7 @@ export default function CarFilters({
                     <div className="absolute top-1/2 left-0 right-0 h-1 -translate-y-1/2 rounded-full bg-gray-200" />
                     {/* Active track */}
                     <div
-                      className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-gray-900"
+                      className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-primary"
                       style={{
                         left: `${((priceMin - PRICE_MIN) / (PRICE_MAX - PRICE_MIN)) * 100}%`,
                         right: `${100 - ((priceMax - PRICE_MIN) / (PRICE_MAX - PRICE_MIN)) * 100}%`,

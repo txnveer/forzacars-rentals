@@ -7,11 +7,21 @@ import { NextResponse, type NextRequest } from "next/server";
  *
  * Role-specific checks happen in the route-group layouts (server-side),
  * not here — the middleware only enforces "logged in or not".
+ *
+ * PUBLIC pages (no login required):
+ *   / (home), /cars, /cars/[id], /compare, /login, /signup
+ *
+ * PROTECTED pages (login required):
+ *   /bookings, /wallet, /profile, /messages, /biz/*, /admin/*
  */
-const PROTECTED_PREFIXES = ["/bookings", "/wallet", "/biz", "/admin"];
-
-/** Paths that authenticated users should bounce away from. */
-const AUTH_PAGES = ["/login", "/signup"];
+const PROTECTED_PREFIXES = [
+  "/bookings",
+  "/wallet",
+  "/profile",
+  "/messages",
+  "/biz",
+  "/admin",
+];
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -61,22 +71,16 @@ export async function updateSession(request: NextRequest) {
 
   if (!user && isProtected) {
     const url = request.nextUrl.clone();
+    // Build returnTo with pathname and search params
+    const returnTo = pathname + request.nextUrl.search;
     url.pathname = "/login";
+    url.search = `?returnTo=${encodeURIComponent(returnTo)}`;
     return NextResponse.redirect(url);
   }
 
-  // -----------------------------------------------------------------------
-  // Convenience: authenticated users visiting /login or /signup are sent
-  // to the home page. The pages themselves handle the role-based redirect,
-  // but this avoids a full page render when possible.
-  // -----------------------------------------------------------------------
-  const isAuthPage = AUTH_PAGES.some((p) => pathname.startsWith(p));
-
-  if (user && isAuthPage) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/";
-    return NextResponse.redirect(url);
-  }
+  // NOTE: We no longer redirect authenticated users away from /login or /signup
+  // in middleware. The page components handle this check and redirect appropriately.
+  // This avoids issues with stale sessions causing unexpected redirects.
 
   // IMPORTANT: You *must* return the supabaseResponse object as-is.
   return supabaseResponse;

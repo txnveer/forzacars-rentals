@@ -2,6 +2,12 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { getProfile } from "@/lib/auth/getProfile";
 import CancelBookingButton from "./CancelBookingButton";
+import {
+  formatUtcForDisplay,
+  calculateDurationFromUtc,
+  formatDurationShort,
+  TIMEZONE_LABEL,
+} from "@/lib/timezone";
 
 export default async function BookingsPage() {
   const profile = await getProfile();
@@ -36,6 +42,9 @@ export default async function BookingsPage() {
           <p className="mt-1 text-gray-500">
             {bookings?.length ?? 0} total booking
             {bookings?.length !== 1 ? "s" : ""}
+            <span className="ml-2 text-xs text-gray-400">
+              · Times shown in {TIMEZONE_LABEL}
+            </span>
           </p>
         </div>
         <Link
@@ -108,8 +117,6 @@ function BookingCard({
   showCancel?: boolean;
   userEmail?: string;
 }) {
-  const start = new Date(b.start_ts);
-  const end = new Date(b.end_ts);
   const isCanceled = b.status === "CANCELED";
 
   // Resolve unit name from the joined car_unit → car_models chain
@@ -124,18 +131,18 @@ function BookingCard({
     unitData?.vin ??
     `Unit ${b.car_unit_id?.slice(0, 8) ?? "unknown"}`;
 
-  const fmtDate = (d: Date) =>
-    d.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-
-  const fmtTime = (d: Date) =>
-    d.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-    });
+  // Format dates in business timezone (Central Time)
+  const startDisplay = formatUtcForDisplay(b.start_ts, "EEE, MMM d 'at' h:mm a");
+  const endDisplay = formatUtcForDisplay(b.end_ts, "EEE, MMM d 'at' h:mm a");
+  
+  // Check if it's a multi-day booking
+  const startDate = formatUtcForDisplay(b.start_ts, "yyyy-MM-dd");
+  const endDate = formatUtcForDisplay(b.end_ts, "yyyy-MM-dd");
+  const isMultiDay = startDate !== endDate;
+  
+  // Calculate duration
+  const duration = calculateDurationFromUtc(b.start_ts, b.end_ts);
+  const durationStr = formatDurationShort(duration);
 
   return (
     <li
@@ -149,9 +156,23 @@ function BookingCard({
         {/* Left: info */}
         <div className="min-w-0">
           <p className="truncate font-semibold text-gray-900">{carName}</p>
-          <p className="mt-1 text-sm text-gray-500">
-            {fmtDate(start)} &middot; {fmtTime(start)} – {fmtTime(end)}
-          </p>
+          
+          {/* Show full date range for multi-day, compact for same-day */}
+          {isMultiDay ? (
+            <div className="mt-1 text-sm text-gray-500">
+              <p>{startDisplay}</p>
+              <p>→ {endDisplay}</p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Duration: {durationStr}
+              </p>
+            </div>
+          ) : (
+            <p className="mt-1 text-sm text-gray-500">
+              {startDisplay} – {formatUtcForDisplay(b.end_ts, "h:mm a")}
+              <span className="ml-2 text-xs text-gray-400">({durationStr})</span>
+            </p>
+          )}
+          
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-gray-700">
               {b.credits_charged} credit{b.credits_charged !== 1 ? "s" : ""}
@@ -165,6 +186,11 @@ function BookingCard({
             >
               {b.status}
             </span>
+            {isMultiDay && (
+              <span className="inline-block rounded-full bg-sky-light px-2 py-0.5 text-xs font-medium text-primary">
+                Multi-day
+              </span>
+            )}
           </div>
 
           {/* Pricing breakdown (only for bookings created after migration) */}

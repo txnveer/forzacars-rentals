@@ -1,7 +1,24 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import {
+  format,
+  addDays,
+  differenceInMinutes,
+  isBefore,
+  isEqual,
+  startOfDay,
+} from "date-fns";
+import { toZonedTime, fromZonedTime } from "date-fns-tz";
+import { calculateRentalPrice, getPricingSummary, type PricingBreakdown } from "@/lib/pricing";
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const BUSINESS_TIMEZONE = "America/Chicago";
+const MIN_BOOKING_HOURS = 1;
 
 interface AvailableUnit {
   id: string;
@@ -24,7 +41,12 @@ interface ScheduleCalendarProps {
   modelId: string;
   suggestedCph: number | null;
   colorFilter?: string;
+  isAuthenticated?: boolean;
 }
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
 
 // Generate time slots for a day (30-minute increments)
 function generateTimeSlots(): string[] {
@@ -39,40 +61,121 @@ function generateTimeSlots(): string[] {
 
 const TIME_SLOTS = generateTimeSlots();
 
-// Format a date for display
-function formatDate(date: Date): string {
-  return date.toLocaleDateString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
+// Format time for display (12-hour format)
+function formatTime12h(time: string): string {
+  const [h, m] = time.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hour12 = h % 12 || 12;
+  return `${hour12}:${m.toString().padStart(2, "0")} ${ampm}`;
 }
 
-// Format datetime for API
-function toISOString(date: Date, time: string): string {
-  const [hours, minutes] = time.split(":").map(Number);
-  const d = new Date(date);
-  d.setHours(hours, minutes, 0, 0);
-  return d.toISOString();
+// Get current time in business timezone, rounded to next 30-minute slot
+function getDefaultStartTime(): string {
+  const nowInTz = toZonedTime(new Date(), BUSINESS_TIMEZONE);
+  const minutes = nowInTz.getMinutes();
+  const roundedMinutes = minutes < 30 ? 30 : 0;
+  const hours = minutes < 30 ? nowInTz.getHours() : nowInTz.getHours() + 1;
+  return `${(hours % 24).toString().padStart(2, "0")}:${roundedMinutes.toString().padStart(2, "0")}`;
 }
+
+// Convert local date + time in business timezone to UTC ISO string
+function toUtcIso(date: Date, time: string): string {
+  const [hours, minutes] = time.split(":").map(Number);
+  // Create a date in the business timezone
+  const tzDate = new Date(date);
+  tzDate.setHours(hours, minutes, 0, 0);
+  // Convert from business timezone to UTC
+  const utcDate = fromZonedTime(tzDate, BUSINESS_TIMEZONE);
+  return utcDate.toISOString();
+}
+
+// Format date for display in business timezone
+function formatDateDisplay(date: Date): string {
+  return format(date, "EEE, MMM d");
+}
+
+// Format full datetime for summary
+function formatDateTimeSummary(date: Date, time: string): string {
+  const [h, m] = time.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hour12 = h % 12 || 12;
+  return `${format(date, "EEE MMM d")}, ${hour12}:${m.toString().padStart(2, "0")} ${ampm}`;
+}
+
+// Calculate duration between two dates with times
+function calculateDuration(
+  startDate: Date,
+  startTime: string,
+  endDate: Date,
+  endTime: string
+): { totalMinutes: number; days: number; hours: number; minutes: number } | null {
+  if (!startTime || !endTime) return null;
+
+  const [sh, sm] = startTime.split(":").map(Number);
+  const [eh, em] = endTime.split(":").map(Number);
+
+  const start = new Date(startDate);
+  start.setHours(sh, sm, 0, 0);
+
+  const end = new Date(endDate);
+  end.setHours(eh, em, 0, 0);
+
+  const totalMinutes = differenceInMinutes(end, start);
+  if (totalMinutes < 60) return null;
+
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const remainingMinutes = totalMinutes % (24 * 60);
+  const hours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes % 60;
+
+  return { totalMinutes, days, hours, minutes };
+}
+
+// Format duration for display
+function formatDuration(duration: {
+  days: number;
+  hours: number;
+  minutes: number;
+}): string {
+  const parts: string[] = [];
+  if (duration.days > 0) {
+    parts.push(`${duration.days} day${duration.days !== 1 ? "s" : ""}`);
+  }
+  if (duration.hours > 0) {
+    parts.push(`${duration.hours} hour${duration.hours !== 1 ? "s" : ""}`);
+  }
+  if (duration.minutes > 0) {
+    parts.push(`${duration.minutes} min`);
+  }
+  return parts.join(", ") || "0 hours";
+}
+
+// ============================================================================
+// COMPONENT
+// ============================================================================
 
 export default function ScheduleCalendar({
   modelId,
   suggestedCph,
   colorFilter,
+  isAuthenticated = false,
 }: ScheduleCalendarProps) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
-  // Selected date (defaults to today)
-  const [selectedDate, setSelectedDate] = useState<Date>(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d;
-  });
+  // Get today in business timezone
+  const todayInTz = useMemo(() => {
+    const now = toZonedTime(new Date(), BUSINESS_TIMEZONE);
+    return startOfDay(now);
+  }, []);
 
-  // Time selection
+  // State
+  const [startDate, setStartDate] = useState<Date>(todayInTz);
+  const [endDate, setEndDate] = useState<Date>(todayInTz);
   const [startTime, setStartTime] = useState<string>("");
   const [endTime, setEndTime] = useState<string>("");
+  const [isMultiDay, setIsMultiDay] = useState(false);
 
   // Availability state
   const [availability, setAvailability] = useState<AvailabilityResponse | null>(null);
@@ -84,21 +187,74 @@ export default function ScheduleCalendar({
   const [bookingError, setBookingError] = useState<string | null>(null);
   const [bookingSuccess, setBookingSuccess] = useState<string | null>(null);
 
-  // Calculate duration in hours
-  const getDuration = useCallback((): number | null => {
+  // Calculate duration
+  const duration = useMemo(() => {
+    return calculateDuration(startDate, startTime, endDate, endTime);
+  }, [startDate, startTime, endDate, endTime]);
+
+  // Pricing breakdown with day-rate caps
+  const pricingBreakdown = useMemo((): PricingBreakdown | null => {
+    if (!duration || !suggestedCph) return null;
+    return calculateRentalPrice(duration.totalMinutes, suggestedCph);
+  }, [duration, suggestedCph]);
+
+  // Estimated credits (for backward compatibility)
+  const estimatedCredits = pricingBreakdown?.totalCredits ?? null;
+
+  // Validation
+  const validationError = useMemo(() => {
     if (!startTime || !endTime) return null;
+
     const [sh, sm] = startTime.split(":").map(Number);
     const [eh, em] = endTime.split(":").map(Number);
+
+    const start = new Date(startDate);
+    start.setHours(sh, sm, 0, 0);
+
+    const end = new Date(endDate);
+    end.setHours(eh, em, 0, 0);
+
+    if (isBefore(end, start) || isEqual(end, start)) {
+      return "End time must be after start time";
+    }
+
+    const totalMinutes = differenceInMinutes(end, start);
+    if (totalMinutes < 60) {
+      return "Minimum booking duration is 1 hour";
+    }
+
+    // Check if start is in the past
+    const nowInTz = toZonedTime(new Date(), BUSINESS_TIMEZONE);
+    if (isBefore(start, nowInTz)) {
+      return "Cannot book in the past";
+    }
+
+    return null;
+  }, [startDate, startTime, endDate, endTime]);
+
+  // Filter end times based on start time and whether multi-day
+  const validEndTimes = useMemo(() => {
+    if (!startTime) return [];
+
+    const [sh, sm] = startTime.split(":").map(Number);
     const startMinutes = sh * 60 + sm;
-    const endMinutes = eh * 60 + em;
-    if (endMinutes <= startMinutes) return null;
-    return (endMinutes - startMinutes) / 60;
-  }, [startTime, endTime]);
+
+    // For same-day bookings, end time must be after start + 1 hour
+    if (!isMultiDay || format(startDate, "yyyy-MM-dd") === format(endDate, "yyyy-MM-dd")) {
+      return TIME_SLOTS.filter((t) => {
+        const [eh, em] = t.split(":").map(Number);
+        const endMinutes = eh * 60 + em;
+        return endMinutes >= startMinutes + 60;
+      });
+    }
+
+    // For multi-day bookings, any time is valid (as long as total >= 1 hour)
+    return TIME_SLOTS;
+  }, [startTime, startDate, endDate, isMultiDay]);
 
   // Check availability when selection changes
   useEffect(() => {
-    const duration = getDuration();
-    if (!startTime || !endTime || duration === null || duration < 1) {
+    if (!startTime || !endTime || validationError || !duration) {
       setAvailability(null);
       return;
     }
@@ -107,8 +263,8 @@ export default function ScheduleCalendar({
       setLoading(true);
       setError(null);
 
-      const start = toISOString(selectedDate, startTime);
-      const end = toISOString(selectedDate, endTime);
+      const start = toUtcIso(startDate, startTime);
+      const end = toUtcIso(endDate, endTime);
 
       const params = new URLSearchParams({
         modelId,
@@ -138,23 +294,36 @@ export default function ScheduleCalendar({
     };
 
     fetchAvailability();
-  }, [selectedDate, startTime, endTime, modelId, colorFilter, getDuration]);
+  }, [startDate, startTime, endDate, endTime, modelId, colorFilter, validationError, duration]);
+
+  // Build current URL for returnTo
+  const getCurrentUrl = useCallback(() => {
+    const params = searchParams.toString();
+    return params ? `${pathname}?${params}` : pathname;
+  }, [pathname, searchParams]);
+
+  // Handle login redirect
+  const handleLoginRedirect = () => {
+    const returnTo = getCurrentUrl();
+    router.push(`/login?returnTo=${encodeURIComponent(returnTo)}`);
+  };
 
   // Handle booking
   const handleBook = async () => {
-    if (!availability || availability.availableCount === 0) return;
+    if (!isAuthenticated) {
+      handleLoginRedirect();
+      return;
+    }
 
-    const duration = getDuration();
-    if (!duration || duration < 1) return;
+    if (!availability || availability.availableCount === 0 || !duration) return;
 
     setBooking(true);
     setBookingError(null);
     setBookingSuccess(null);
 
-    // Pick the first available unit
     const unitId = availability.availableUnitIds[0];
-    const start = toISOString(selectedDate, startTime);
-    const end = toISOString(selectedDate, endTime);
+    const start = toUtcIso(startDate, startTime);
+    const end = toUtcIso(endDate, endTime);
 
     try {
       const res = await fetch("/api/book", {
@@ -166,12 +335,15 @@ export default function ScheduleCalendar({
       const data = await res.json();
 
       if (!res.ok) {
+        if (res.status === 401) {
+          handleLoginRedirect();
+          return;
+        }
         setBookingError(data.error || "Booking failed");
       } else {
         setBookingSuccess(
           `Booked! Charged ${data.creditsCharged} credits. Balance: ${data.balanceAfter}`
         );
-        // Refresh the page after a short delay
         setTimeout(() => {
           router.refresh();
         }, 2000);
@@ -183,149 +355,275 @@ export default function ScheduleCalendar({
     }
   };
 
-  // Navigate days
-  const goToDay = (offset: number) => {
-    const d = new Date(selectedDate);
-    d.setDate(d.getDate() + offset);
-    setSelectedDate(d);
-    setStartTime("");
-    setEndTime("");
+  // Quick duration handlers
+  const handleQuickDuration = (days: number) => {
+    if (!startTime) return;
+    const newEndDate = addDays(startDate, days);
+    setEndDate(newEndDate);
+    setIsMultiDay(days > 0);
+    // Set end time same as start time for multi-day
+    if (days > 0) {
+      setEndTime(startTime);
+    }
+  };
+
+  // Navigate start date
+  const goToStartDay = (offset: number) => {
+    const newDate = addDays(startDate, offset);
+    if (isBefore(newDate, todayInTz)) return;
+    setStartDate(newDate);
+    // Ensure end date is not before start date
+    if (isBefore(endDate, newDate)) {
+      setEndDate(newDate);
+    }
     setAvailability(null);
   };
 
-  const duration = getDuration();
-  const estimatedCredits =
-    duration && suggestedCph ? Math.ceil(duration * suggestedCph) : null;
+  // Navigate end date
+  const goToEndDay = (offset: number) => {
+    const newDate = addDays(endDate, offset);
+    if (isBefore(newDate, startDate)) return;
+    setEndDate(newDate);
+    setAvailability(null);
+  };
 
-  // Filter end times to only show valid options (after start, at least 1 hour)
-  const validEndTimes = startTime
-    ? TIME_SLOTS.filter((t) => {
-        const [sh, sm] = startTime.split(":").map(Number);
-        const [eh, em] = t.split(":").map(Number);
-        const startMinutes = sh * 60 + sm;
-        const endMinutes = eh * 60 + em;
-        return endMinutes >= startMinutes + 60;
-      })
-    : [];
+  // Toggle multi-day mode
+  const toggleMultiDay = () => {
+    const newIsMultiDay = !isMultiDay;
+    setIsMultiDay(newIsMultiDay);
+    if (!newIsMultiDay) {
+      setEndDate(startDate);
+      setEndTime("");
+    } else {
+      setEndDate(addDays(startDate, 1));
+    }
+  };
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-5">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-500">
-        Schedule Booking
-      </h2>
-
-      {/* Date navigation */}
-      <div className="mt-4 flex items-center justify-between">
-        <button
-          onClick={() => goToDay(-1)}
-          disabled={selectedDate <= new Date(new Date().setHours(0, 0, 0, 0))}
-          className="rounded px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 disabled:opacity-50"
-        >
-          &larr; Prev
-        </button>
-        <span className="font-medium text-gray-900">
-          {formatDate(selectedDate)}
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-500">
+          Schedule Booking
+        </h2>
+        <span className="text-xs text-gray-400">
+          Times in Central Time (Chicago)
         </span>
+      </div>
+
+      {/* Multi-day toggle */}
+      <div className="mt-4 flex items-center gap-3">
         <button
-          onClick={() => goToDay(1)}
-          className="rounded px-2 py-1 text-sm text-gray-600 hover:bg-gray-100"
+          type="button"
+          role="switch"
+          aria-checked={isMultiDay}
+          onClick={toggleMultiDay}
+          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50 focus:ring-offset-2 ${
+            isMultiDay ? "bg-primary" : "bg-gray-300"
+          }`}
         >
-          Next &rarr;
+          <span
+            className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow ring-0 transition-transform ${
+              isMultiDay ? "translate-x-5" : "translate-x-0"
+            }`}
+          />
         </button>
+        <span className="text-sm text-gray-700">
+          Multi-day / Overnight rental
+        </span>
       </div>
 
-      {/* Time selection */}
-      <div className="mt-4 grid grid-cols-2 gap-4">
-        <div>
-          <label
-            htmlFor="start-time"
-            className="block text-xs font-medium text-gray-700"
-          >
-            Start Time
-          </label>
-          <select
-            id="start-time"
-            value={startTime}
-            onChange={(e) => {
-              setStartTime(e.target.value);
-              setEndTime("");
-            }}
-            className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          >
-            <option value="">Select start</option>
-            {TIME_SLOTS.slice(0, -2).map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label
-            htmlFor="end-time"
-            className="block text-xs font-medium text-gray-700"
-          >
-            End Time
-          </label>
-          <select
-            id="end-time"
-            value={endTime}
-            onChange={(e) => setEndTime(e.target.value)}
-            disabled={!startTime}
-            className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:bg-gray-100"
-          >
-            <option value="">Select end</option>
-            {validEndTimes.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
+      {/* Start Date/Time */}
+      <div className="mt-5">
+        <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
+          Pick-up
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          {/* Start Date */}
+          <div>
+            <div className="flex items-center justify-between rounded-lg border border-gray-300 px-3 py-2">
+              <button
+                onClick={() => goToStartDay(-1)}
+                disabled={isBefore(addDays(startDate, -1), todayInTz)}
+                className="text-gray-400 hover:text-gray-600 disabled:opacity-30"
+              >
+                ←
+              </button>
+              <span className="text-sm font-medium text-gray-900">
+                {formatDateDisplay(startDate)}
+              </span>
+              <button
+                onClick={() => goToStartDay(1)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                →
+              </button>
+            </div>
+          </div>
+          {/* Start Time */}
+          <div>
+            <select
+              value={startTime}
+              onChange={(e) => {
+                setStartTime(e.target.value);
+                if (!isMultiDay) setEndTime("");
+              }}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="">Select time</option>
+              {TIME_SLOTS.map((t) => (
+                <option key={t} value={t}>
+                  {formatTime12h(t)}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
-      {/* Duration display */}
-      {duration !== null && duration >= 1 && (
-        <p className="mt-3 text-sm text-gray-600">
-          Duration: <strong>{duration} hour{duration !== 1 ? "s" : ""}</strong>
-          {estimatedCredits && (
-            <span className="ml-2 text-gray-400">
-              (~{estimatedCredits} credits)
-            </span>
+      {/* End Date/Time */}
+      <div className="mt-4">
+        <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
+          Return
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          {/* End Date */}
+          <div>
+            <div className={`flex items-center justify-between rounded-lg border px-3 py-2 ${
+              isMultiDay ? "border-gray-300" : "border-gray-200 bg-gray-50"
+            }`}>
+              <button
+                onClick={() => goToEndDay(-1)}
+                disabled={!isMultiDay || isBefore(addDays(endDate, -1), startDate)}
+                className="text-gray-400 hover:text-gray-600 disabled:opacity-30"
+              >
+                ←
+              </button>
+              <span className={`text-sm font-medium ${isMultiDay ? "text-gray-900" : "text-gray-500"}`}>
+                {formatDateDisplay(endDate)}
+              </span>
+              <button
+                onClick={() => goToEndDay(1)}
+                disabled={!isMultiDay}
+                className="text-gray-400 hover:text-gray-600 disabled:opacity-30"
+              >
+                →
+              </button>
+            </div>
+          </div>
+          {/* End Time */}
+          <div>
+            <select
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+              disabled={!startTime}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:bg-gray-50"
+            >
+              <option value="">Select time</option>
+              {validEndTimes.map((t) => (
+                <option key={t} value={t}>
+                  {formatTime12h(t)}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Quick Duration Buttons */}
+      {startTime && (
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            onClick={() => handleQuickDuration(1)}
+            className="rounded-full border border-gray-300 px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:border-primary hover:text-primary transition-colors"
+          >
+            +1 day
+          </button>
+          <button
+            onClick={() => handleQuickDuration(2)}
+            className="rounded-full border border-gray-300 px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:border-primary hover:text-primary transition-colors"
+          >
+            +2 days
+          </button>
+          <button
+            onClick={() => handleQuickDuration(3)}
+            className="rounded-full border border-gray-300 px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:border-primary hover:text-primary transition-colors"
+          >
+            Weekend
+          </button>
+          <button
+            onClick={() => handleQuickDuration(7)}
+            className="rounded-full border border-gray-300 px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:border-primary hover:text-primary transition-colors"
+          >
+            1 week
+          </button>
+        </div>
+      )}
+
+      {/* Duration Summary */}
+      {duration && !validationError && (
+        <div className="mt-4 rounded-lg bg-sky-light/30 border border-sky-light p-3">
+          <p className="text-sm font-medium text-gray-900">
+            {formatDateTimeSummary(startDate, startTime)} → {formatDateTimeSummary(endDate, endTime)}
+          </p>
+          <p className="mt-1 text-sm text-gray-600">
+            Duration: <strong>{formatDuration(duration)}</strong>
+          </p>
+          {pricingBreakdown && (
+            <div className="mt-2 pt-2 border-t border-sky-light">
+              <p className="text-sm font-medium text-primary">
+                Total: {pricingBreakdown.totalCredits} credits
+                {pricingBreakdown.pricingMode !== "HOURLY" && (
+                  <span className="ml-2 text-xs font-normal text-primary-600">
+                    ({getPricingSummary(pricingBreakdown)})
+                  </span>
+                )}
+              </p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                {pricingBreakdown.breakdownText}
+              </p>
+            </div>
           )}
-        </p>
+        </div>
+      )}
+
+      {/* Validation Error */}
+      {validationError && startTime && endTime && (
+        <div className="mt-4 rounded-lg bg-red-50 border border-red-200 p-3">
+          <p className="text-sm text-red-700">{validationError}</p>
+        </div>
       )}
 
       {/* Loading indicator */}
       {loading && (
-        <p className="mt-3 text-sm text-gray-500">Checking availability...</p>
+        <p className="mt-4 text-sm text-gray-500">Checking availability...</p>
       )}
 
       {/* Error */}
       {error && (
-        <div className="mt-3 rounded-md bg-red-50 p-2">
+        <div className="mt-4 rounded-lg bg-red-50 border border-red-200 p-3">
           <p className="text-sm text-red-700">{error}</p>
         </div>
       )}
 
       {/* Availability result */}
-      {availability && !loading && (
+      {availability && !loading && !validationError && (
         <div className="mt-4">
           <div
             className={`rounded-lg p-3 ${
               availability.availableCount > 0
-                ? "bg-emerald-50 text-emerald-700"
+                ? "bg-emerald-50 border border-emerald-200 text-emerald-700"
                 : "bg-gray-100 text-gray-600"
             }`}
           >
             <p className="text-sm font-medium">
               {availability.availableCount > 0 ? (
                 <>
-                  {availability.availableCount} unit
+                  ✓ {availability.availableCount} unit
                   {availability.availableCount !== 1 ? "s" : ""} available
                 </>
               ) : (
-                "No units available for this time slot"
+                "No units available for this time range"
               )}
             </p>
             {availability.availableCount > 0 && availability.availableUnits[0] && (
@@ -336,9 +634,15 @@ export default function ScheduleCalendar({
                   </span>
                 )}
                 {(availability.availableUnits[0].creditsPerHour ?? suggestedCph) && (
-                  <span>
-                    {availability.availableUnits[0].creditsPerHour ?? suggestedCph} cr/hr
-                  </span>
+                  <>
+                    <span>
+                      {availability.availableUnits[0].creditsPerHour ?? suggestedCph} cr/hr
+                    </span>
+                    <span className="mx-1">•</span>
+                    <span>
+                      {(availability.availableUnits[0].creditsPerHour ?? suggestedCph) * 5}/day
+                    </span>
+                  </>
                 )}
               </p>
             )}
@@ -349,9 +653,17 @@ export default function ScheduleCalendar({
             <button
               onClick={handleBook}
               disabled={booking}
-              className="mt-4 w-full rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className={`mt-4 w-full rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                isAuthenticated
+                  ? "bg-primary hover:bg-primary-600"
+                  : "bg-gray-700 hover:bg-gray-600"
+              }`}
             >
-              {booking ? "Booking..." : "Book Now"}
+              {booking
+                ? "Booking..."
+                : isAuthenticated
+                ? `Book Now${estimatedCredits ? ` (${estimatedCredits} credits)` : ""}`
+                : "Log in to Book"}
             </button>
           )}
         </div>
@@ -359,22 +671,22 @@ export default function ScheduleCalendar({
 
       {/* Booking error */}
       {bookingError && (
-        <div className="mt-3 rounded-md bg-red-50 p-2">
+        <div className="mt-4 rounded-lg bg-red-50 border border-red-200 p-3">
           <p className="text-sm text-red-700">{bookingError}</p>
         </div>
       )}
 
       {/* Booking success */}
       {bookingSuccess && (
-        <div className="mt-3 rounded-md bg-green-50 p-2">
-          <p className="text-sm text-green-700">{bookingSuccess}</p>
+        <div className="mt-4 rounded-lg bg-emerald-50 border border-emerald-200 p-3">
+          <p className="text-sm text-emerald-700">{bookingSuccess}</p>
         </div>
       )}
 
       {/* Instructions */}
       <p className="mt-4 text-xs text-gray-400">
-        Select a date and time window (minimum 1 hour, 30-minute increments).
-        Availability is checked in real-time.
+        Select pick-up and return dates/times. Toggle "Multi-day" for overnight or multi-day rentals.
+        Minimum duration: 1 hour.
       </p>
     </div>
   );

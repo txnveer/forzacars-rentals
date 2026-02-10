@@ -1,18 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getDashboardPath } from "@/lib/auth/requireRole";
-import type { Profile } from "@/lib/auth/getProfile";
+import { getAuthRedirectUrl } from "@/lib/auth/validation";
 
 /**
  * GET /auth/callback
  *
  * Supabase redirects here after email confirmation or OAuth sign-in.
  * We exchange the `code` query-param for a session, then redirect the
- * user to their role-specific dashboard.
+ * user to their intended destination or /cars.
  */
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = request.nextUrl;
   const code = searchParams.get("code");
+  // Support both 'next' (Supabase default) and 'returnTo' (our custom param)
+  const next = searchParams.get("next") || searchParams.get("returnTo");
 
   if (code) {
     const supabase = await createClient();
@@ -24,14 +25,9 @@ export async function GET(request: NextRequest) {
       } = await supabase.auth.getUser();
 
       if (user) {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("role")
-          .eq("id", user.id)
-          .single();
-
-        const role = (profile?.role ?? "CUSTOMER") as Profile["role"];
-        return NextResponse.redirect(`${origin}${getDashboardPath(role)}`);
+        // Redirect to the intended destination or default
+        const redirectUrl = getAuthRedirectUrl(next);
+        return NextResponse.redirect(`${origin}${redirectUrl}`);
       }
     }
   }

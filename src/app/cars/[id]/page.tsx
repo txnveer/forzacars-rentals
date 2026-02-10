@@ -3,6 +3,8 @@ import Image from "next/image";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { piClassName, piClassColor } from "@/lib/piClass";
+import { getProfile } from "@/lib/auth/getProfile";
+import PriceDisplay from "@/components/PriceDisplay";
 import ColorFilter from "./ColorFilter";
 import ScheduleCalendar from "./ScheduleCalendar";
 
@@ -31,6 +33,11 @@ export default async function CarModelDetailPage({
   const colorFilter = sp.color?.trim() || null;
 
   const supabase = await createClient();
+  
+  // Check if user is authenticated
+  const profile = await getProfile();
+  const isAuthenticated = !!profile;
+  
   const { data: car } = await supabase
     .from("car_models")
     .select("*")
@@ -113,6 +120,61 @@ export default async function CarModelDetailPage({
     [car.manufacturer, car.model].filter(Boolean).join(" ");
 
   const suggestedCph = car.suggested_credits_per_hour;
+
+  // ---- Compute displayed price and availability for label logic ----
+  // Starting price = MIN of all active unit prices (using override or suggested)
+  const allActiveUnits = allUnits ?? [];
+  const unitPrices = allActiveUnits.map(
+    (u) => u.credits_per_hour ?? suggestedCph ?? 0
+  ).filter((p) => p > 0);
+  
+  const startingPrice = unitPrices.length > 0 
+    ? Math.min(...unitPrices) 
+    : suggestedCph;
+  
+  // Model is available if ANY active unit has no overlapping booking/blackout
+  // We check against ALL units (not filtered by color)
+  const allUnitIds = allActiveUnits.map((u) => u.id);
+  let allBusyUnitIds = new Set<string>();
+
+  if (allUnitIds.length > 0) {
+    const { data: allOverlappingBookings } = await supabase
+      .from("bookings")
+      .select("car_unit_id")
+      .in("car_unit_id", allUnitIds)
+      .eq("status", "CONFIRMED")
+      .lt("start_ts", next24h)
+      .gt("end_ts", now);
+
+    const allBookedIds = new Set(
+      (allOverlappingBookings ?? []).map((b) => b.car_unit_id)
+    );
+
+    const { data: allOverlappingBlackouts } = await supabase
+      .from("car_blackouts")
+      .select("car_unit_id")
+      .in("car_unit_id", allUnitIds)
+      .lt("start_ts", next24h)
+      .gt("end_ts", now);
+
+    const allBlackedOutIds = new Set(
+      (allOverlappingBlackouts ?? []).map((b) => b.car_unit_id)
+    );
+
+    allBusyUnitIds = new Set(
+      Array.from(allBookedIds).concat(Array.from(allBlackedOutIds))
+    );
+  }
+
+  const modelAvailableNow = allActiveUnits.some((u) => !allBusyUnitIds.has(u.id));
+
+  // Price label logic:
+  // A) If available_now = true:
+  //    - Show "suggested" only if startingPrice == suggestedCph
+  //    - Otherwise no label
+  // B) If available_now = false:
+  // Market price is the suggested_credits_per_hour from the model
+  const marketHourlyRate = suggestedCph;
 
   return (
     <section className="mx-auto max-w-5xl px-6 py-10">
@@ -199,17 +261,15 @@ export default async function CarModelDetailPage({
             )}
           </div>
 
-          {/* Suggested pricing */}
-          {suggestedCph != null && (
-            <div className="mt-5 flex items-baseline gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
-              <span className="text-2xl font-bold text-emerald-700">
-                {suggestedCph}
-              </span>
-              <span className="text-sm text-emerald-600">credits / hour</span>
-              <span className="ml-auto text-xs text-emerald-500">
-                suggested
-              </span>
-            </div>
+          {/* Pricing */}
+          {startingPrice != null && (
+            <PriceDisplay
+              hourlyRate={startingPrice}
+              marketHourlyRate={marketHourlyRate}
+              isAvailable={modelAvailableNow}
+              variant="full"
+              className="mt-5"
+            />
           )}
 
           {/* Stats */}
@@ -230,9 +290,9 @@ export default async function CarModelDetailPage({
                       {display}
                     </span>
                   </div>
-                  <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-gray-100">
+                  <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-sky-light/50">
                     <div
-                      className="h-full rounded-full bg-gray-800 transition-all"
+                      className="h-full rounded-full bg-primary transition-all"
                       style={{ width: `${pct}%` }}
                     />
                   </div>
@@ -245,8 +305,9 @@ export default async function CarModelDetailPage({
           <div className="mt-10">
             <ScheduleCalendar
               modelId={id}
-              suggestedCph={suggestedCph}
+              suggestedCph={startingPrice ?? suggestedCph}
               colorFilter={colorFilter ?? undefined}
+              isAuthenticated={isAuthenticated}
             />
           </div>
 
@@ -266,10 +327,10 @@ export default async function CarModelDetailPage({
               </span>{" "}
               unit{availableUnits.length !== 1 ? "s" : ""} available
               {colorFilter ? ` in ${colorFilter}` : ""} for the next 24 h
-              {suggestedCph && (
+              {startingPrice && (
                 <span className="text-gray-400">
                   {" "}
-                  · from {suggestedCph} cr/hr
+                  · from {startingPrice} cr/hr ({startingPrice * 5}/day)
                 </span>
               )}
             </p>
@@ -326,9 +387,26 @@ export default async function CarModelDetailPage({
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        <span className="text-gray-600">
-                          {cph ? `${cph} cr/hr` : "—"}
-                        </span>
+                        {cph ? (
+                          <div className="text-right">
+                            <div className="flex items-center gap-1">
+                              {suggestedCph && cph < suggestedCph && (
+                                <span className="text-xs text-gray-400 line-through">
+                                  {suggestedCph}
+                                </span>
+                              )}
+                              <span className="text-gray-600">{cph} cr/hr</span>
+                              {suggestedCph && cph < suggestedCph && (
+                                <span className="rounded bg-accent-sand px-1 py-0.5 text-[9px] font-bold text-gray-900">
+                                  -{Math.round(((suggestedCph - cph) / suggestedCph) * 100)}%
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-xs text-gray-400">{cph * 5}/day</span>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
                         <span
                           className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
                             isAvailable

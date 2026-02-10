@@ -2,6 +2,115 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  @apply bg-gray-50 text-gray-900 antialiased;
+/* ============================================================================
+   Theme System
+   - Colors: Primary Blue, Sky, Surface, Accent Sand/Caramel
+   - Typography: Barlow Condensed (wordmark), Inter (UI)
+   ============================================================================ */
+
+@layer base {
+  :root {
+    /* Font families */
+    --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+    --font-display: var(--font-barlow), var(--font-sans);
+
+    /* Color tokens */
+    --color-primary: #3A74A5;
+    --color-primary-hover: #2E5C84;
+    --color-sky: #B6D2E6;
+    --color-surface: #F3F3F1;
+    --color-surface-elevated: #FFFFFF;
+    --color-accent-sand: #FDDD86;
+    --color-accent-caramel: #E4AF6B;
+
+    /* Navbar height */
+    --navbar-height: 64px;
+  }
+
+  body {
+    @apply bg-surface-200 text-gray-900 antialiased;
+    font-family: var(--font-sans);
+  }
+
+  /* Typography scale */
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight text-gray-900;
+  }
+}
+
+@layer components {
+  /* Wordmark / Brand text - Forza Horizon style */
+  .font-display {
+    font-family: var(--font-display);
+    @apply uppercase italic font-extrabold;
+    letter-spacing: -0.02em;
+  }
+
+  /* Hero title - extra large wordmark */
+  .hero-title {
+    font-family: var(--font-display);
+    @apply uppercase italic font-extrabold;
+    letter-spacing: -0.03em;
+    font-size: clamp(2.5rem, 8vw, 5rem);
+    line-height: 1;
+  }
+
+  /* Primary button */
+  .btn-primary {
+    @apply inline-flex items-center justify-center h-10 px-5 text-sm font-semibold text-white bg-primary rounded-lg transition-all;
+    @apply hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:ring-offset-2;
+  }
+
+  /* Secondary/outline button */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center h-10 px-5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg transition-all;
+    @apply hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:ring-offset-2;
+  }
+
+  /* Small button variant */
+  .btn-sm {
+    @apply h-9 px-4 text-sm;
+  }
+
+  /* Navigation link */
+  .nav-link {
+    @apply relative px-3 py-2 text-sm font-medium text-gray-600 transition-colors;
+    @apply hover:text-primary;
+  }
+
+  .nav-link-active {
+    @apply text-primary;
+  }
+
+  .nav-link-active::after {
+    content: '';
+    @apply absolute bottom-0 left-3 right-3 h-0.5 bg-accent-sand rounded-full;
+  }
+
+  /* Card with elevation */
+  .card {
+    @apply bg-white rounded-xl border border-gray-200 shadow-sm;
+  }
+
+  /* Role badge */
+  .badge-role {
+    @apply inline-flex items-center h-6 px-2 text-[10px] font-bold uppercase tracking-wider rounded-full;
+  }
+
+  .badge-customer {
+    @apply badge-role bg-sky-light text-primary;
+  }
+
+  .badge-business {
+    @apply badge-role bg-accent-sand text-gray-900;
+  }
+
+  .badge-admin {
+    @apply badge-role bg-accent-caramel text-gray-900;
+  }
+
+  /* Small/caption text */
+  .text-caption {
+    @apply text-xs font-medium tracking-wide uppercase text-gray-500;
+  }
 }

@@ -3,6 +3,7 @@ import Image from "next/image";
 import { createClient } from "@/lib/supabase/server";
 import { getImageUrl } from "@/lib/supabase/getImageUrl";
 import { piClassName, piClassColor } from "@/lib/piClass";
+import { PriceCompact } from "@/components/PriceDisplay";
 import ComparePageClient from "./ComparePageClient";
 
 async function resolveCarDisplayImageUrl(car: {
@@ -146,19 +147,14 @@ export default async function ComparePage({ searchParams }: Props) {
               </div>
 
               {/* Pricing */}
-              <div className="mt-4 flex items-baseline gap-2">
-                {car.starting_price != null && (
-                  <span className="text-lg font-bold text-emerald-700">
-                    {car.starting_price} cr/hr
-                  </span>
-                )}
-                {car.suggested_credits_per_hour != null &&
-                  car.starting_price !== car.suggested_credits_per_hour && (
-                    <span className="text-xs text-gray-400">
-                      (suggested: {car.suggested_credits_per_hour})
-                    </span>
-                  )}
-              </div>
+              {car.starting_price != null && (
+                <PriceCompact
+                  hourlyRate={car.starting_price}
+                  marketHourlyRate={car.suggested_credits_per_hour}
+                  isAvailable={(car.available_unit_count ?? 0) > 0}
+                  className="mt-4"
+                />
+              )}
 
               {/* CTA */}
               <Link
@@ -279,7 +275,7 @@ export default async function ComparePage({ searchParams }: Props) {
                   <td key={car.id} className="px-6 py-3 text-center">
                     <span
                       className={`text-sm font-semibold ${
-                        wins ? "text-emerald-700" : "text-gray-900"
+                        wins ? "text-primary" : "text-gray-900"
                       }`}
                     >
                       {price != null ? `${price} cr/hr` : "—"}

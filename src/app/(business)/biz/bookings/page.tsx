@@ -1,13 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
+import {
+  formatUtcForDisplay,
+  calculateDurationFromUtc,
+  formatDurationShort,
+  TIMEZONE_LABEL,
+} from "@/lib/timezone";
 
 function fmt(iso: string) {
-  return new Date(iso).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatUtcForDisplay(iso, "MMM d, yyyy h:mm a");
 }
 
 export default async function BusinessBookingsPage() {
@@ -53,6 +53,9 @@ export default async function BusinessBookingsPage() {
         </h1>
         <p className="mt-1 text-gray-500">
           All reservations for your fleet&apos;s car units.
+          <span className="ml-2 text-xs text-gray-400">
+            · Times shown in {TIMEZONE_LABEL}
+          </span>
         </p>
       </div>
 
@@ -143,10 +146,26 @@ function BookingRow({ booking }: { booking: any }) {
   const customerEmail =
     (booking.profiles as { email: string } | null)?.email ?? "—";
   const isCanceled = booking.status === "CANCELED";
+  
+  // Check if multi-day
+  const startDate = formatUtcForDisplay(booking.start_ts, "yyyy-MM-dd");
+  const endDate = formatUtcForDisplay(booking.end_ts, "yyyy-MM-dd");
+  const isMultiDay = startDate !== endDate;
+  
+  // Calculate duration
+  const duration = calculateDurationFromUtc(booking.start_ts, booking.end_ts);
+  const durationStr = formatDurationShort(duration);
 
   return (
     <tr className={isCanceled ? "text-gray-400" : ""}>
-      <td className="px-6 py-4 font-medium text-gray-900">{unitName}</td>
+      <td className="px-6 py-4 font-medium text-gray-900">
+        {unitName}
+        {isMultiDay && (
+          <span className="ml-2 inline-block rounded-full bg-sky-light px-1.5 py-0.5 text-[10px] font-medium text-primary">
+            {durationStr}
+          </span>
+        )}
+      </td>
       <td className="px-6 py-4 text-gray-600">{customerEmail}</td>
       <td className="px-6 py-4">{fmt(booking.start_ts)}</td>
       <td className="px-6 py-4">{fmt(booking.end_ts)}</td>
