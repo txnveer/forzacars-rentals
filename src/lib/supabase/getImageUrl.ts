@@ -18,13 +18,10 @@ export async function getImageUrl(
   if (!path || !path.trim()) return null;
 
   const supabase = createServiceRoleClient();
-  const {
-    data: { signedUrl },
-    error,
-  } = await supabase.storage
+  const { data, error } = await supabase.storage
     .from(CAR_IMAGES_BUCKET)
     .createSignedUrl(path.trim(), SIGNED_URL_EXPIRY_SECONDS);
 
-  if (error || !signedUrl) return null;
-  return signedUrl;
+  if (error || !data?.signedUrl) return null;
+  return data.signedUrl;
 }

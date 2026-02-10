@@ -41,7 +41,7 @@ interface Props {
 
 type Params = Awaited<Props["searchParams"]>;
 
-function applyBaseFilters<T extends { eq: Function; or: Function }>(
+function applyBaseFilters<T extends { eq: (col: string, val: unknown) => T; or: (filter: string) => T }>(
   query: T,
   params: Params
 ): T {

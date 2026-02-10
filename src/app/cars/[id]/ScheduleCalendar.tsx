@@ -626,26 +626,30 @@ export default function ScheduleCalendar({
                 "No units available for this time range"
               )}
             </p>
-            {availability.availableCount > 0 && availability.availableUnits[0] && (
-              <p className="mt-1 text-xs">
-                {availability.availableUnits[0].color && (
-                  <span className="mr-2">
-                    Color: {availability.availableUnits[0].color}
-                  </span>
-                )}
-                {(availability.availableUnits[0].creditsPerHour ?? suggestedCph) && (
-                  <>
-                    <span>
-                      {availability.availableUnits[0].creditsPerHour ?? suggestedCph} cr/hr
+            {availability.availableCount > 0 && availability.availableUnits[0] && (() => {
+              const unit = availability.availableUnits[0];
+              const hourlyRate = unit.creditsPerHour ?? suggestedCph;
+              return (
+                <p className="mt-1 text-xs">
+                  {unit.color && (
+                    <span className="mr-2">
+                      Color: {unit.color}
                     </span>
-                    <span className="mx-1">•</span>
-                    <span>
-                      {(availability.availableUnits[0].creditsPerHour ?? suggestedCph) * 5}/day
-                    </span>
-                  </>
-                )}
-              </p>
-            )}
+                  )}
+                  {hourlyRate && (
+                    <>
+                      <span>
+                        {hourlyRate} cr/hr
+                      </span>
+                      <span className="mx-1">•</span>
+                      <span>
+                        {hourlyRate * 5}/day
+                      </span>
+                    </>
+                  )}
+                </p>
+              );
+            })()}
           </div>
 
           {/* Book button */}

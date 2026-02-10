@@ -48,7 +48,7 @@ export default async function MessagesPage() {
   const threadIds = (threads ?? []).map((t: ThreadRow) => t.id);
   
   let lastMessages: MessagePreview[] = [];
-  let unreadCounts: Record<string, number> = {};
+  const unreadCounts: Record<string, number> = {};
 
   if (threadIds.length > 0) {
     // Fetch last message for each thread
@@ -105,8 +105,8 @@ export default async function MessagesPage() {
   }
 
   function getOtherParticipant(thread: ThreadRow): string {
-    if (thread.created_by !== profile.id) return thread.created_by;
-    if (thread.customer_id && thread.customer_id !== profile.id) return thread.customer_id;
+    if (thread.created_by !== profile!.id) return thread.created_by;
+    if (thread.customer_id && thread.customer_id !== profile!.id) return thread.customer_id;
     return thread.created_by;
   }
 

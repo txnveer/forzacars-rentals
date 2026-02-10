@@ -43,10 +43,10 @@ export default function SignupForm({ returnTo }: SignupFormProps) {
     const result = signupSchema.safeParse({ email, password, confirmPassword });
     if (!result.success) {
       const fieldErrors: FieldErrors = {};
-      for (const error of result.error.errors) {
-        const field = error.path[0] as keyof FieldErrors;
+      for (const issue of result.error.issues) {
+        const field = issue.path[0] as keyof FieldErrors;
         if (field && !fieldErrors[field]) {
-          fieldErrors[field] = error.message;
+          fieldErrors[field] = issue.message;
         }
       }
       setErrors(fieldErrors);
